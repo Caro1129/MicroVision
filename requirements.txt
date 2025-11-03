@@ -1,5 +1,5 @@
 streamlit
 pandas
-numpy==1.25.2                 # <-- ¡Añade esta línea!
-opencv-python==4.8.0.74
+numpy==1.25.2
+opencv-python==4.8.0.74 
 reportlab
