@@ -2211,7 +2211,8 @@ elif st.session_state["pagina"] == "parametros":
         
         with col_img:
             if microorg_norm in imagenes and os.path.exists(imagenes[microorg_norm]):
-                st.image(imagenes[microorg_norm], width=300)
+                st.image(imagenes[microorg_norm], width=250)
+
                 # Pie de figura: referencia en letra pequeña y gris
                 st.markdown(
                     f"""
@@ -2221,7 +2222,7 @@ elif st.session_state["pagina"] == "parametros":
                         text-align:justify;
                         font-style:italic;
                         line-height:1.05;
-                        margin-top:10px;
+                        margin-top:5px;
                         text-justify:inter-word;
                     '>
                         {refText}
