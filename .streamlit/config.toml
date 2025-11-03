@@ -1,0 +1,5 @@
+# .streamlit/config.toml
+
+[general]
+# Esto le dice a Streamlit qué archivo principal ejecutar
+mainModule = "Microvision.py"
