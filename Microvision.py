@@ -2069,21 +2069,20 @@ if st.session_state["pagina"] == "inicio":
 
     st.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
     
-
     st.markdown("""
-                <style>
-                div.stButton > button:first-child {
-        display: block;
-        margin-left: 160%;
-        font-size: 32px !important;
-        padding: 20px 60px !important;
-        border-radius: 15px !important;
-        background-color: #4CAF50 !important;
-        color: white !important;
-        border: none !important;
-        cursor: pointer !important;
-    }
-    </style>
+        <style>
+        div.stButton > button:first-child {
+            display: block;
+            margin: 0 auto;
+            font-size: 32px !important;
+            padding: 20px 60px !important;
+            border-radius: 15px !important;
+            background-color: #4CAF50 !important;
+            color: white !important;
+            border: none !important;
+            cursor: pointer !important;
+        }
+        </style>
     """, unsafe_allow_html=True)
 
     if st.button("INICIO"):
