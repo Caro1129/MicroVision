@@ -2221,7 +2221,7 @@ elif st.session_state["pagina"] == "parametros":
                         text-align:justify;
                         font-style:italic;
                         line-height:1.05;
-                        margin-top:2px;
+                        margin-top:10px;
                         text-justify:inter-word;
                     '>
                         {refText}
