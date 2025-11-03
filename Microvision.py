@@ -2068,7 +2068,7 @@ if st.session_state["pagina"] == "inicio":
     add_bg_from_local("imagen_inicio.png")
 
     st.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
-    
+
     st.markdown("""
         <style>
         div.stButton > button:first-child {
@@ -2140,12 +2140,12 @@ elif st.session_state["pagina"] == "parametros":
     carpeta_imagenes = os.path.join(base_path, "Imagenes_tesis_microorganismos")
 
     imagenes = {
-        "escherichia coli": os.path.join(carpeta_imagenes, "Escherichia_coli.png"),
-        "klebsiella pneumoniae": os.path.join(carpeta_imagenes, "Klebsiella_pneumoniae.png"),
-        "staphylococcus aureus": os.path.join(carpeta_imagenes, "Staphylococcus_aureus.png"),
-        "aspergillus niger": os.path.join(carpeta_imagenes, "Aspergillus_niger.png"),
+        "escherichia coli": os.path.join(carpeta_imagenes, "Escherichia_coli.PNG"),
+        "klebsiella pneumoniae": os.path.join(carpeta_imagenes, "Klebsiella_pneumoniae.PNG"),
+        "staphylococcus aureus": os.path.join(carpeta_imagenes, "Staphylococcus_aureus.PNG"),
+        "aspergillus niger": os.path.join(carpeta_imagenes, "Aspergillus_niger.PNG"),
         "trichoderma virens": os.path.join(carpeta_imagenes, "Trichoderma_virens.png"),
-        "streptomyces species": os.path.join(carpeta_imagenes, "Streptomyces_species.png")
+        "streptomyces species": os.path.join(carpeta_imagenes, "Streptomyces_species.PNG")
     }
 
     microorg_norm = microorg_selec.strip().lower()
