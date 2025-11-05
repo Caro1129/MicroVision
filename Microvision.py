@@ -112,19 +112,33 @@ def generar_pdf_reporte_completo():
     def agregar_imagen_al_pdf(img_array, caption, story, temp_files):
         """Convierte numpy array a imagen temporal y la agrega al PDF"""
         try:
-            # Convertir de BGR a RGB si es necesario
-            if len(img_array.shape) == 3 and img_array.shape[2] == 3:
-                img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+            if img_array is None:
+                print(f"Imagen vacía: {caption}")
+                story.append(Paragraph(f"[Imagen no disponible: {caption}]", styles["Normal"]))
+                return
+            
+            # Verificar tipo de dato
+            if not isinstance(img_array, np.ndarray):
+                print(f"No es numpy array: {type(img_array)}")
+                story.append(Paragraph(f"[Formato incorrecto: {caption}]", styles["Normal"]))
+                return
+            
+            # Las imágenes en session_state ya están en RGB (de load_and_process_image)
+            # Solo necesitamos asegurar que sean uint8
+            if img_array.dtype != np.uint8:
+                img_rgb = (img_array * 255).astype(np.uint8) if img_array.max() <= 1.0 else img_array.astype(np.uint8)
             else:
                 img_rgb = img_array
             
-            # Crear imagen PIL
+            # Crear imagen PIL directamente (ya está en RGB)
             pil_img = Image.fromarray(img_rgb)
             
             # Guardar temporalmente
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
             pil_img.save(tmp.name, 'PNG')
             temp_files.append(tmp.name)
+            
+            print(f"✅ Imagen guardada: {tmp.name} para {caption}")
             
             # Agregar al PDF con tamaño controlado
             from reportlab.platypus import Image as RLImage
@@ -134,7 +148,9 @@ def generar_pdf_reporte_completo():
             story.append(Spacer(1, 0.3*cm))
             
         except Exception as e:
-            print(f"Error al agregar imagen: {e}")
+            import traceback
+            print(f"❌ Error al agregar imagen: {e}")
+            print(traceback.format_exc())
             story.append(Paragraph(f"[Error al cargar imagen: {caption}]", styles["Normal"]))
 
     # IMÁGENES DE CONTROL (si aplica)
@@ -185,34 +201,220 @@ def generar_pdf_reporte_completo():
     story.append(Paragraph("3. Resultados del analisis", estilo_subtitulo))
 
     valores_replicas = st.session_state.get("valores_replicas", [])
+    treated_results_list = st.session_state.get("treated_results_list", [])
     
-    if valores_replicas and len(valores_replicas) > 0:
-        # Crear tabla de resultados
-        datos_tabla = [["Replica", "Valor"]]
-        
-        for i, v in enumerate(valores_replicas):
-            datos_tabla.append([f"Replica {i+1}", f"{v:.2f}"])
-        
-        # Agregar estadísticas
-        media = st.session_state.get("media", 0)
-        desviacion = st.session_state.get("desviacion", 0)
-        
-        datos_tabla.append(["Media", f"{media:.2f}"])
-        if len(valores_replicas) > 1:
-            datos_tabla.append(["Desviacion estandar", f"{desviacion:.2f}"])
+    # Determinar qué tipo de tabla crear según la norma
+    if 'ASTM_G21' in norma or 'G21' in norma:
+        # TABLA ESPECÍFICA PARA ASTM G21-15 con Rating y Cobertura
+        if treated_results_list and len(treated_results_list) > 0:
+            datos_tabla = [["Replica", "Cobertura (%)", "Rating ASTM (0-4)", "Interpretacion"]]
+            
+            for i, replica in enumerate(treated_results_list):
+                results = replica.get('results', {})
+                cobertura = results.get('coverage_percentage', 0)
+                rating = results.get('astm_g21_rating', 0)
+                
+                # Interpretación breve según rating
+                if rating == 0:
+                    interp = "Sin crecimiento"
+                elif rating == 1:
+                    interp = "Trazas"
+                elif rating == 2:
+                    interp = "Ligero"
+                elif rating == 3:
+                    interp = "Moderado"
+                else:
+                    interp = "Severo"
+                
+                datos_tabla.append([
+                    f"Replica {i+1}",
+                    f"{cobertura:.2f}",
+                    str(rating),
+                    interp
+                ])
+            
+            # Agregar estadísticas de cobertura
+            media = st.session_state.get("media", 0)
+            desviacion = st.session_state.get("desviacion", 0)
+            
+            datos_tabla.append([
+                "Media",
+                f"{media:.2f}",
+                "-",
+                "-"
+            ])
+            
+            if len(treated_results_list) > 1:
+                datos_tabla.append([
+                    "Desv. Estandar",
+                    f"{desviacion:.2f}",
+                    "-",
+                    "-"
+                ])
+            
+            tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[4*cm, 3.5*cm, 4*cm, 4.5*cm])
+            tabla.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("BACKGROUND", (0, 1), (-1, -len(treated_results_list)-1), colors.whitesmoke),
+                ("BACKGROUND", (0, -2), (-1, -1), colors.HexColor("#E8F5E9")),
+                ("FONTSIZE", (0, 0), (-1, -1), 9)
+            ]))
+            story.append(tabla)
+            story.append(Spacer(1, 0.8*cm))
+    
+    elif 'JIS' in norma or 'Z2801' in norma:
+        # TABLA ESPECÍFICA PARA JIS Z 2801
+        if treated_results_list and len(treated_results_list) > 0:
+            datos_tabla = [["Replica", "Colonias Tratada", "Reduccion Log", "Cumple (R>=2)"]]
+            
+            for i, replica in enumerate(treated_results_list):
+                results = replica.get('results', {})
+                count = results.get('treated_count', 0)
+                log_red = results.get('log_reduction', 0)
+                cumple = "Si" if isinstance(log_red, (int, float)) and log_red >= 2.0 else "No"
+                
+                log_red_str = f"{log_red:.2f}" if isinstance(log_red, (int, float)) else str(log_red)
+                
+                datos_tabla.append([
+                    f"Replica {i+1}",
+                    str(count),
+                    log_red_str,
+                    cumple
+                ])
+            
+            # Media si hay múltiples réplicas
+            if len(treated_results_list) > 1:
+                media = st.session_state.get("media", 0)
+                datos_tabla.append([
+                    "Promedio",
+                    "-",
+                    f"{media:.2f}",
+                    "-"
+                ])
+            
+            tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
+            tabla.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke)
+            ]))
+            story.append(tabla)
+            story.append(Spacer(1, 0.8*cm))
+    
+    elif 'AATCC' in norma or 'TM147' in norma:
+        # TABLA PARA AATCC TM147
+        if treated_results_list and len(treated_results_list) > 0:
+            datos_tabla = [["Replica", "Halo (mm)", "Inhibicion", "Efectividad"]]
+            
+            for i, replica in enumerate(treated_results_list):
+                results = replica.get('results', {})
+                halo = results.get('inhibition_halo_mm', 0)
+                tiene_halo = results.get('has_inhibition', False)
+                efectivo = "Efectivo" if halo > 1.0 else "No efectivo"
+                
+                datos_tabla.append([
+                    f"Replica {i+1}",
+                    f"{halo:.2f}",
+                    "Si" if tiene_halo else "No",
+                    efectivo
+                ])
+            
+            # Media
+            if len(treated_results_list) > 1:
+                media = st.session_state.get("media", 0)
+                datos_tabla.append([
+                    "Promedio",
+                    f"{media:.2f}",
+                    "-",
+                    "-"
+                ])
+            
+            tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
+            tabla.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke)
+            ]))
+            story.append(tabla)
+            story.append(Spacer(1, 0.8*cm))
+    
+    elif 'E1428' in norma or 'ASTM_E1428' in norma:
+        # TABLA PARA ASTM E1428
+        if treated_results_list and len(treated_results_list) > 0:
+            datos_tabla = [["Replica", "Cobertura (%)", "Crecimiento", "Resistencia"]]
+            
+            for i, replica in enumerate(treated_results_list):
+                results = replica.get('results', {})
+                cobertura = results.get('coverage_percentage', 0)
+                growth = results.get('has_visible_growth', False)
+                resistencia = results.get('material_resistance', 'Desconocido')
+                
+                datos_tabla.append([
+                    f"Replica {i+1}",
+                    f"{cobertura:.2f}",
+                    "Si" if growth else "No",
+                    resistencia
+                ])
+            
+            # Media
+            if len(treated_results_list) > 1:
+                media = st.session_state.get("media", 0)
+                datos_tabla.append([
+                    "Promedio",
+                    f"{media:.2f}",
+                    "-",
+                    "-"
+                ])
+            
+            tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
+            tabla.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke)
+            ]))
+            story.append(tabla)
+            story.append(Spacer(1, 0.8*cm))
+    
+    else:
+        # TABLA GENÉRICA (fallback)
+        if valores_replicas and len(valores_replicas) > 0:
+            datos_tabla = [["Replica", "Valor"]]
+            
+            for i, v in enumerate(valores_replicas):
+                datos_tabla.append([f"Replica {i+1}", f"{v:.2f}"])
+            
+            media = st.session_state.get("media", 0)
+            desviacion = st.session_state.get("desviacion", 0)
+            
+            datos_tabla.append(["Media", f"{media:.2f}"])
+            if len(valores_replicas) > 1:
+                datos_tabla.append(["Desviacion estandar", f"{desviacion:.2f}"])
 
-        tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[8*cm, 8*cm])
-        tabla.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
-            ("BACKGROUND", (0, -2), (-1, -1), colors.HexColor("#E8F5E9"))
-        ]))
-        story.append(tabla)
-        story.append(Spacer(1, 0.8*cm))
+            tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[8*cm, 8*cm])
+            tabla.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
+                ("BACKGROUND", (0, -2), (-1, -1), colors.HexColor("#E8F5E9"))
+            ]))
+            story.append(tabla)
+            story.append(Spacer(1, 0.8*cm))
 
         # === GRÁFICA (si hay múltiples réplicas) ===
         if len(valores_replicas) > 1:
@@ -313,7 +515,6 @@ def generar_pdf_reporte_completo():
                 pass
         raise
 
-
 def generar_conclusion_texto():
     """Genera texto de conclusión basado en los resultados"""
     norma = st.session_state.get("norma", "")
@@ -327,31 +528,31 @@ def generar_conclusion_texto():
         if "AATCC" in norma:
             halo = results.get("inhibition_halo_mm", 0)
             if halo > 0:
-                return f"el material evaluado presentó un halo de inhibición de {halo:.2f} mm frente a <i>{microorg}</i>. este resultado indica actividad antibacteriana según la norma {norma}.".lower()
+                return f"El material evaluado presentó un halo de inhibición de {halo:.2f} mm frente a <i>{microorg}</i>. este resultado indica actividad antibacteriana según la norma {norma}.".lower()
             else:
-                return f"no se observó halo de inhibición frente a <i>{microorg}</i>, indicando ausencia de actividad antibacteriana según la norma {norma}.".lower()
+                return f"No se observó halo de inhibición frente a <i>{microorg}</i>, indicando ausencia de actividad antibacteriana según la norma {norma}.".lower()
         
         elif "ASTM G21" in norma:
             rating = results.get("astm_g21_rating", 0)
             coverage = results.get("coverage_percentage", 0)
-            return f"el material obtuvo una calificación de {rating} en la escala astm g21-15, con una cobertura fúngica del {coverage:.2f}%.".lower()
+            return f"El material obtuvo una calificación de {rating} en la escala astm g21-15, con una cobertura fúngica del {coverage:.2f}%.".lower()
         
         elif "JIS" in norma:
             logR = results.get("log_reduction", 0)
             cumple = "cumple" if logR >= 2 else "no cumple"
-            return f"el material presentó una reducción logarítmica de {logR:.2f} frente a <i>{microorg}</i>. por lo tanto, el material {cumple} con la norma {norma}.".lower()
+            return f"El material presentó una reducción logarítmica de {logR:.2f} frente a <i>{microorg}</i>. por lo tanto, el material {cumple} con la norma {norma}.".lower()
     
     else:  # Múltiples réplicas
         if "ASTM G21" in norma:
-            return f"se analizaron {num_replicas} réplicas del ensayo según la norma astm g21-15. el material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}% (de).".lower()
+            return f"Se analizaron {num_replicas} réplicas del ensayo según la norma astm g21-15. el material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}% (de).".lower()
         
         elif "AATCC" in norma:
-            return f"se analizaron {num_replicas} réplicas según la norma {norma}, con un halo de inhibición promedio de {media:.2f} ± {desviacion:.2f} mm (de).".lower()
+            return f"Se analizaron {num_replicas} réplicas según la norma {norma}, con un halo de inhibición promedio de {media:.2f} ± {desviacion:.2f} mm (de).".lower()
         
         elif "JIS" in norma:
-            return f"el análisis de {num_replicas} réplicas según la norma {norma} mostró una reducción logarítmica promedio de {media:.2f} ± {desviacion:.2f} (de).".lower()
+            return f"El análisis de {num_replicas} réplicas según la norma {norma} mostró una reducción logarítmica promedio de {media:.2f} ± {desviacion:.2f} (de).".lower()
     
-    return "no se detectaron resultados válidos para generar una conclusión.".lower()
+    return "No se detectaron resultados válidos para generar una conclusión.".lower()
 
 
 def agregar_test_t_pdf_tabla(story, test_t_results, temp_files, styles):
