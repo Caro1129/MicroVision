@@ -2087,7 +2087,7 @@ if st.session_state["pagina"] == "inicio":
         <style>
         div.stButton > button:first-child {
             display: block;
-            margin: 20% auto;
+            margin: 200% auto;
             font-size: 32px !important;
             padding: 20px 60px !important;
             border-radius: 15px !important;
