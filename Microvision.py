@@ -2099,6 +2099,9 @@ if st.session_state["pagina"] == "inicio":
 
 #  PÁGINA DE PARÁMETROS 
 elif st.session_state["pagina"] == "parametros":
+    
+    add_bg_from_local("Fondo_parametros.png")
+
      # DESCRIPCIÓN DEL APLICATIVO 
     st.markdown("""
     <div style='text-align: justify;'>
