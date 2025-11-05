@@ -2554,40 +2554,35 @@ elif st.session_state["pagina"] == "parametros":
             st.markdown(f"### Réplica tratada {idx+1}")
             cols = st.columns(2)
 
-            # Verificar y mostrar la imagen
+           # Verificar y mostrar la imagen
             if orig_img is not None and isinstance(orig_img, np.ndarray):
                 
-                # *** APLICACIÓN DE LA CORRECCIÓN CLAVE: BGR a RGB y manejo de errores de versión ***
+                # *** CORRECCIÓN CLAVE: BGR a RGB y ELIMINACIÓN de 'use_container_width' ***
                 try:
-                    # Asegurarse de que tenemos 3 canales (no 4 para RGBA, ni 1 para escala de grises)
+                    # 1. Convertir de BGR (OpenCV) a RGB (Streamlit/PIL)
+                    # Esto es necesario ya que el debugg mostró que es un NumPy array (OpenCV).
                     if len(orig_img.shape) == 3 and orig_img.shape[2] == 3:
-                        # 1. Convertir de BGR (OpenCV) a RGB (Streamlit/PIL)
                         orig_img_rgb = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
                     else:
-                        # Si no tiene 3 canales, asumimos que Streamlit puede manejar el tipo directamente
-                        orig_img_rgb = orig_img
+                        orig_img_rgb = orig_img # Ya es escala de grises o 4 canales
                         
-                    # 2. Mostrar la imagen convertida
-                    # *** CORRECCIÓN DEL ARGUMENTO 'use_container_width' ***
-                    # Si su Streamlit es muy antiguo, debe eliminar este argumento.
-                    # Si es moderno, debe funcionar. Lo eliminamos para compatibilidad:
-                    cols[0].image(orig_img_rgb, caption="Original (BGR a RGB)", use_container_width=True)
+                    # 2. Mostrar la imagen. ELIMINAMOS 'use_container_width' para evitar el TypeError
+                    cols[0].image(orig_img_rgb, caption="Original") 
                 
-                except AttributeError:
-                    # Si falla por el argumento 'use_container_width' (versión antigua)
-                    st.warning("⚠️ Su versión de Streamlit no soporta 'use_container_width' en columnas. Usando compatibilidad.")
-                    cols[0].image(orig_img_rgb, caption="Original (BGR a RGB)")
-                    
                 except Exception as e:
-                    # Fallback para cualquier otro error
-                    st.error(f"❌ Error interno al mostrar imagen: {str(e)}")
-                    # Mostrar la imagen original SIN 'use_container_width' para evitar doble error
-                    cols[0].image(orig_img, caption="Original (Error en conversión)")
+                    # Fallback en caso de que la conversión falle por alguna razón inesperada
+                    st.error(f"❌ Error al intentar mostrar la imagen. Detalles: {str(e)}")
+                    # Mostrar el original sin ningún argumento problemático
+                    cols[0].image(orig_img, caption="Original (Fallo en Conversión/Muestra)")
 
             else:
                 # Manejo del caso donde orig_img es None
-                cols[0].error(f"❌ Error: No se pudo cargar o procesar la imagen original de la réplica {idx+1}. Revise el archivo.")
-            
+                cols[0].error(f"❌ Error: No se pudo cargar o procesar la imagen original de la réplica {idx+1}.")
+
+            # Si también está usando use_container_width=True para la segunda columna (processed_img), 
+            # debe eliminarlo allí también para mantener la consistencia.
+            if processed_img is not None:
+                cols[1].image(processed_img, caption="Resultado final") # AQUI TAMBIÉN DEBE ELIMINAR 'use_container_width'        
             # Mostrar métricas según norma
             if 'AATCC' in norma or 'TM147' in norma:
                 halo = results.get('inhibition_halo_mm', 0)
