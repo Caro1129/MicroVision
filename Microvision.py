@@ -81,6 +81,15 @@ def generar_pdf_reporte_completo():
     fecha = datetime.now().strftime("%d/%m/%Y - %H:%M")
     story.append(Paragraph(f"<b>Fecha de generación:</b> {fecha}", styles["Normal"]))
     story.append(Spacer(1, 1*cm))
+    
+    def convertir_markdown_a_html(texto):
+        # Maneja casos donde el texto no es una cadena (ej. números)
+        if not isinstance(texto, str):
+            return str(texto)
+        # Convierte **texto** a <b>texto</b> usando expresiones regulares
+        texto_corregido = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', texto, flags=re.DOTALL)
+        return texto_corregido
+
 
     # === DESCRIPCIÓN DEL ENSAYO ===
     norma = st.session_state.get("norma", "No especificada")
@@ -135,10 +144,14 @@ def generar_pdf_reporte_completo():
     # FIX: Convertir las marcas de negrita de Markdown (**) a etiquetas ReportLab (<b>)
     # El patrón r'\*\*(.*?)\*\*' encuentra cualquier texto rodeado por ** y lo envuelve en <b>...</b>
     import re
-    interpretacion_rl = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', interpretacion, flags=re.DOTALL)
+    # === CONCLUSIÓN ===
+    interpretacion = st.session_state.get("interpretacion", "No se ha generado interpretación para este análisis.")
+
+    # 🔴 APLICACIÓN DEL FIX: Corrige el formato de la conclusión
+    interpretacion_rl = convertir_markdown_a_html(interpretacion)
 
     story.append(Paragraph("Conclusión", estilo_subtitulo))
-    # Usar la versión con etiquetas HTML válidas
+    # Usa la variable corregida
     story.append(Paragraph(interpretacion_rl, estilo_justificado))
     story.append(PageBreak())
 
