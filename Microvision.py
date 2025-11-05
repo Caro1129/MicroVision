@@ -37,7 +37,7 @@ from datetime import datetime
 
 
 def generar_pdf_reporte_completo():
-    # === CONFIGURACIÓN DEL DOCUMENTO ===
+    """Genera PDF completo con imágenes, gráficas y resultados"""
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
@@ -49,13 +49,14 @@ def generar_pdf_reporte_completo():
     )
     story = []
     styles = getSampleStyleSheet()
+    temp_files = []  # Para limpiar archivos temporales
 
-    # === ESTILOS PERSONALIZADOS ===
+    # === ESTILOS ===
     estilo_titulo = ParagraphStyle(
         name="Titulo",
         parent=styles["Heading1"],
         fontSize=18,
-        alignment=1,  # Centrado
+        alignment=1,
         spaceAfter=20,
         textColor=colors.HexColor("#2E4053")
     )
@@ -72,93 +73,245 @@ def generar_pdf_reporte_completo():
     estilo_justificado = ParagraphStyle(
         name="Justify",
         parent=styles["Normal"],
-        alignment=4,  # Justificado
+        alignment=4,
         leading=15,
         fontSize=11
     )
 
-    story.append(Paragraph("REPORTE DE ANÁLISIS MICROVISION", estilo_titulo))
+    # === ENCABEZADO ===
+    story.append(Paragraph("REPORTE DE ANALISIS MICROVISION", estilo_titulo))
     fecha = datetime.now().strftime("%d/%m/%Y - %H:%M")
-    story.append(Paragraph(f"<b>Fecha de generación:</b> {fecha}", styles["Normal"]))
+    story.append(Paragraph(f"<b>Fecha de generacion:</b> {fecha}", styles["Normal"]))
     story.append(Spacer(1, 1*cm))
-    
-    def convertir_markdown_a_html(texto):
-        # Maneja casos donde el texto no es una cadena (ej. números)
-        if not isinstance(texto, str):
-            return str(texto)
-        # Convierte **texto** a <b>texto</b> usando expresiones regulares
-        texto_corregido = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', texto, flags=re.DOTALL)
-        return texto_corregido
 
-
-    # === DESCRIPCIÓN DEL ENSAYO ===
+    # === 1. INFORMACIÓN DEL ENSAYO ===
     norma = st.session_state.get("norma", "No especificada")
     microorg = st.session_state.get("microorg_selec", "No especificado")
     medio = st.session_state.get("medio", "medio")
     tiempo = st.session_state.get("tiempo", "tiempo no definido")
     temperatura = st.session_state.get("temperatura", "temperatura no definida")
 
-    descripcion_texto = (
-        f"El ensayo se llevó a cabo bajo los lineamientos de la norma {norma}, "
-        f"empleando a <i>{microorg}</i> como organismo de ensayo para evaluar la resistencia fúngica del material. "
-        f"Las muestras fueron incubadas en {medio.lower()} durante {tiempo} "
-        f"a una temperatura de {temperatura} °C, clasificando el grado de biodeterioro conforme a la escala {norma}."
-    )
+    descripcion_texto = st.session_state.get("descripcion", "Descripción no disponible")
+    # Limpiar HTML de la descripción
+    descripcion_texto = descripcion_texto.replace('<div style="text-align: justify;">', '')
+    descripcion_texto = descripcion_texto.replace('</div>', '')
+    descripcion_texto = descripcion_texto.replace('<br><br>', ' ')
 
-    microorg_descripcion = (
-        f"<i>{microorg}</i> es un hongo filamentoso de crecimiento rápido, frecuente en ambientes húmedos y suelos. "
-        "Se utiliza como cepa de ensayo en estudios de biodeterioro para determinar la resistencia fúngica de materiales."
-    )
-
-    story.append(Paragraph("Descripción del ensayo", estilo_subtitulo))
+    story.append(Paragraph("1. Descripcion del ensayo", estilo_subtitulo))
     story.append(Paragraph(descripcion_texto, estilo_justificado))
-    story.append(Spacer(1, 0.4*cm))
-    story.append(Paragraph(microorg_descripcion, estilo_justificado))
-    story.append(Spacer(1, 1*cm))
+    story.append(Spacer(1, 0.8*cm))
 
-    # === TABLA DE RESULTADOS (si existe) ===
-    if "valores_replicas" in st.session_state and st.session_state["valores_replicas"]:
-        story.append(Paragraph("Resultados del análisis", estilo_subtitulo))
+    # === 2. MUESTRAS ANALIZADAS (IMÁGENES) ===
+    story.append(Paragraph("2. Muestras analizadas", estilo_subtitulo))
+    
+    es_jis = 'JIS' in str(norma) or 'Z2801' in str(norma)
+    treated_results_list = st.session_state.get("treated_results_list", [])
+    control_results_list = st.session_state.get("control_results_list", [])
 
-        datos_tabla = [["Muestra", "Valor"]] + [
-            [f"Replica {i+1}", f"{v:.2f}"] for i, v in enumerate(st.session_state["valores_replicas"])
-        ]
-        datos_tabla.append(["Media", f"{st.session_state.get('media', 0):.2f}"])
-        datos_tabla.append(["Desviación estándar", f"{st.session_state.get('desviacion', 0):.2f}"])
+    # Función auxiliar para agregar imágenes al PDF
+    def agregar_imagen_al_pdf(img_array, caption, story, temp_files):
+        """Convierte numpy array a imagen temporal y la agrega al PDF"""
+        try:
+            # Convertir de BGR a RGB si es necesario
+            if len(img_array.shape) == 3 and img_array.shape[2] == 3:
+                img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+            else:
+                img_rgb = img_array
+            
+            # Crear imagen PIL
+            pil_img = Image.fromarray(img_rgb)
+            
+            # Guardar temporalmente
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+            pil_img.save(tmp.name, 'PNG')
+            temp_files.append(tmp.name)
+            
+            # Agregar al PDF con tamaño controlado
+            from reportlab.platypus import Image as RLImage
+            img_reportlab = RLImage(tmp.name, width=8*cm, height=6*cm)
+            story.append(img_reportlab)
+            story.append(Paragraph(f"<i>{caption}</i>", styles["Normal"]))
+            story.append(Spacer(1, 0.3*cm))
+            
+        except Exception as e:
+            print(f"Error al agregar imagen: {e}")
+            story.append(Paragraph(f"[Error al cargar imagen: {caption}]", styles["Normal"]))
 
-        tabla = Table(datos_tabla, hAlign="CENTER")
+    # IMÁGENES DE CONTROL (si aplica)
+    if es_jis and control_results_list:
+        story.append(Paragraph("<b>Muestras CONTROL</b>", styles["Heading3"]))
+        
+        for i, replica in enumerate(control_results_list[:3]):  # Máximo 3 imágenes
+            agregar_imagen_al_pdf(
+                replica['original'],
+                f"Control replica {i+1} | Colonias: {replica.get('count', 'N/A')}",
+                story,
+                temp_files
+            )
+        
+        story.append(Spacer(1, 0.5*cm))
+
+    # IMÁGENES TRATADAS
+    if treated_results_list:
+        titulo_tratadas = "<b>Muestras TRATADAS</b>" if es_jis else "<b>Muestras analizadas</b>"
+        story.append(Paragraph(titulo_tratadas, styles["Heading3"]))
+        
+        for i, replica in enumerate(treated_results_list[:3]):  # Máximo 3 imágenes
+            caption = f"Replica tratada {i+1}"
+            
+            # Agregar métrica según norma
+            results = replica.get('results', {})
+            if 'AATCC' in norma:
+                halo = results.get('inhibition_halo_mm', 0)
+                caption += f" | Halo: {halo:.2f} mm"
+            elif 'G21' in norma:
+                cobertura = results.get('coverage_percentage', 0)
+                caption += f" | Cobertura: {cobertura:.2f}%"
+            elif 'JIS' in norma:
+                count = results.get('treated_count', 0)
+                caption += f" | Colonias: {count}"
+            
+            agregar_imagen_al_pdf(
+                replica['original'],
+                caption,
+                story,
+                temp_files
+            )
+    
+    story.append(Spacer(1, 0.5*cm))
+    story.append(PageBreak())
+
+    # === 3. RESULTADOS CON TABLA ===
+    story.append(Paragraph("3. Resultados del analisis", estilo_subtitulo))
+
+    valores_replicas = st.session_state.get("valores_replicas", [])
+    
+    if valores_replicas and len(valores_replicas) > 0:
+        # Crear tabla de resultados
+        datos_tabla = [["Replica", "Valor"]]
+        
+        for i, v in enumerate(valores_replicas):
+            datos_tabla.append([f"Replica {i+1}", f"{v:.2f}"])
+        
+        # Agregar estadísticas
+        media = st.session_state.get("media", 0)
+        desviacion = st.session_state.get("desviacion", 0)
+        
+        datos_tabla.append(["Media", f"{media:.2f}"])
+        if len(valores_replicas) > 1:
+            datos_tabla.append(["Desviacion estandar", f"{desviacion:.2f}"])
+
+        tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[8*cm, 8*cm])
         tabla.setStyle(TableStyle([
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
             ("ALIGN", (0, 0), (-1, -1), "CENTER"),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke)
+            ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
+            ("BACKGROUND", (0, -2), (-1, -1), colors.HexColor("#E8F5E9"))
         ]))
         story.append(tabla)
-        story.append(Spacer(1, 1*cm))
+        story.append(Spacer(1, 0.8*cm))
 
-    # === CONCLUSIÓN ===
-    interpretacion = st.session_state.get("interpretacion", "No se ha generado interpretación para este análisis.")
-    
-    # FIX: Convertir las marcas de negrita de Markdown (**) a etiquetas ReportLab (<b>)
-    # El patrón r'\*\*(.*?)\*\*' encuentra cualquier texto rodeado por ** y lo envuelve en <b>...</b>
-    import re
-    # === CONCLUSIÓN ===
-    interpretacion = st.session_state.get("interpretacion", "No se ha generado interpretación para este análisis.")
+        # === GRÁFICA (si hay múltiples réplicas) ===
+        if len(valores_replicas) > 1:
+            story.append(Paragraph("<b>Representacion grafica</b>", styles["Heading3"]))
+            
+            try:
+                # Crear gráfica
+                fig, ax = plt.subplots(figsize=(8, 5))
+                
+                error_estandar = desviacion / (len(valores_replicas) ** 0.5)
+                
+                ax.bar(1, media, yerr=error_estandar, capsize=10, 
+                       color="#667eea", edgecolor="black", linewidth=2)
+                
+                ax.set_xticks([1])
+                ax.set_xticklabels(["Promedio"])
+                ax.set_ylabel("Valor medio", fontsize=11)
+                ax.set_title("Media con error estandar", fontsize=12, fontweight='bold')
+                ax.grid(axis='y', alpha=0.3, linestyle='--')
+                ax.set_ylim(bottom=0)
+                
+                # Agregar valor sobre la barra
+                ax.text(1, media, f'{media:.2f}', ha='center', va='bottom', 
+                       fontweight='bold', fontsize=12)
+                
+                plt.tight_layout()
+                
+                # Guardar gráfica
+                tmp_graph = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+                plt.savefig(tmp_graph.name, bbox_inches='tight', dpi=150)
+                plt.close(fig)
+                temp_files.append(tmp_graph.name)
+                
+                # Agregar al PDF
+                from reportlab.platypus import Image as RLImage
+                img = RLImage(tmp_graph.name, width=14*cm, height=9*cm)
+                story.append(img)
+                story.append(Spacer(1, 0.5*cm))
+                
+            except Exception as e:
+                print(f"Error al generar gráfica: {e}")
+                story.append(Paragraph("[Error al generar grafica]", styles["Normal"]))
 
-    # 🔴 APLICACIÓN DEL FIX: Corrige el formato de la conclusión
-    interpretacion_rl = convertir_markdown_a_html(interpretacion)
-
-    story.append(Paragraph("Conclusión", estilo_subtitulo))
-    # Usa la variable corregida
-    story.append(Paragraph(interpretacion_rl, estilo_justificado))
     story.append(PageBreak())
 
-    # === CONSTRUCCIÓN DEL DOCUMENTO ===
-    doc.build(story)
-    buffer.seek(0)
-    return buffer
+    # === 4. TEST T (si existe) ===
+    test_t_results = st.session_state.get("test_t_results", None)
+    if test_t_results and test_t_results.get('suficientes_datos', False):
+        agregar_test_t_pdf_tabla(story, test_t_results, temp_files, styles)
+        story.append(PageBreak())
+
+    # === 5. CONCLUSIÓN ===
+    story.append(Paragraph("4. Conclusion", estilo_subtitulo))
+    
+    interpretacion = st.session_state.get("interpretacion", "No disponible")
+    # Limpiar HTML
+    interpretacion = interpretacion.replace('<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-top: 10px; text-align: justify;">', '')
+    interpretacion = interpretacion.replace('</div>', '')
+    interpretacion = interpretacion.replace('<strong>', '<b>').replace('</strong>', '</b>')
+    interpretacion = interpretacion.replace('<em>', '<i>').replace('</em>', '</i>')
+    interpretacion = interpretacion.replace('<br><br>', '<br/>')
+    
+    story.append(Paragraph(interpretacion, estilo_justificado))
+    story.append(Spacer(1, 1*cm))
+
+    # === PIE DE PÁGINA ===
+    story.append(Spacer(1, 2*cm))
+    pie = f"""
+    <para alignment="center" fontSize="9" textColor="#666666">
+    <b>MicroVision - Sistema de Analisis Microbiologico Automatizado</b><br/>
+    Reporte generado automaticamente el {fecha}<br/>
+    Pontificia Universidad Javeriana
+    </para>
+    """
+    story.append(Paragraph(pie, styles["Normal"]))
+
+    # === CONSTRUIR PDF ===
+    try:
+        doc.build(story)
+        buffer.seek(0)
+        
+        # Limpiar archivos temporales
+        for tmp_file in temp_files:
+            try:
+                os.remove(tmp_file)
+            except:
+                pass
+        
+        return buffer
+        
+    except Exception as e:
+        print(f"Error al construir PDF: {e}")
+        # Limpiar archivos temporales en caso de error
+        for tmp_file in temp_files:
+            try:
+                os.remove(tmp_file)
+            except:
+                pass
+        raise
 
 
 def generar_conclusion_texto():
@@ -3626,8 +3779,8 @@ elif st.session_state["pagina"] == "reporte":
     elif num_replicas > 1:
         if "ASTM G21" in str(norma):
             interpretacion = (
-                f"se analizaron {num_replicas} réplicas del ensayo según la norma astm g21-15. "
-                f"el material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}% (de). "
+                f"Se analizaron {num_replicas} réplicas del ensayo según la norma astm g21-15. "
+                f"El material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}% (de). "
             )
             if media <= 10:
                 interpretacion += "esto indica que el material posee excelente resistencia al crecimiento fúngico."
