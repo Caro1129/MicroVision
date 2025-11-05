@@ -2084,19 +2084,10 @@ if st.session_state["pagina"] == "inicio":
     st.markdown("<br><br><br><br><br>", unsafe_allow_html=True)
 
     st.markdown("""
-    <style>
-    div.stButton > button:first-child {
+                <style>
+                div.stButton > button:first-child {
         display: block;
-        /*
-        * CAMBIO CLAVE:
-        * 0 auto 0 0 establece:
-        * - Margen superior: 0
-        * - Margen derecho: auto (empuja el botón a la izquierda)
-        * - Margen inferior: 0
-        * - Margen izquierdo: 0 (alineado a la izquierda)
-        */
-        margin: 0 auto 0 0 !important; 
-        
+        margin-left: 160%;
         font-size: 32px !important;
         padding: 20px 60px !important;
         border-radius: 15px !important;
@@ -2106,7 +2097,7 @@ if st.session_state["pagina"] == "inicio":
         cursor: pointer !important;
     }
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
     if st.button("INICIO"):
       st.session_state["pagina"] = "parametros"
