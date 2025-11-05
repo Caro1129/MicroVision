@@ -1776,9 +1776,9 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
 
     st.markdown("#### Imágenes procesadas")
     cols = st.columns(4)
-    cols[0].image(orig, caption="Original", use_container_width=True)
-    cols[1].image(pca, caption="PCA", use_container_width=True)
-    cols[2].image(ms, caption="MeanShift", use_container_width=True)
+    cols[1].image(orig, caption="Original", use_container_width=True)
+    #cols[1].image(pca, caption="PCA", use_container_width=True)
+    #cols[2].image(ms, caption="MeanShift", use_container_width=True)
 
     # Imagen final según norma
     processed_img = None
