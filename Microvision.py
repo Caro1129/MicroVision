@@ -238,8 +238,7 @@ import base64, streamlit as st
 import base64, streamlit as st
 
 def add_bg_from_local(image_file):
-    image_path = resource_path(image_file)
-
+    image_path = resource_path(image_file) 
     with open(image_path, "rb") as f:
         encoded = base64.b64encode(f.read()).decode()
 
@@ -251,22 +250,25 @@ def add_bg_from_local(image_file):
             background-size: cover;
         }}
         
-        /* Esta regla apunta al contenedor principal de todo el contenido de Streamlit */
-        .main .block-container {{
-            /* Ajusta este valor según el ancho de tus franjas laterales */
-            padding-left: 200px; 
-            padding-right: 200px;
-            
-            /* Esto es opcional, pero ayuda a centrar si el fondo no cubre bien */
-            margin: auto; 
+        /* === INICIO DE LA NUEVA MODIFICACIÓN CLAVE === */
+        /* Aplicamos margen a la etiqueta <main> que contiene todo el contenido */
+        section.main {{
+            /* Estos 400px son MUY importantes y son la clave. */
+            /* Ponemos un margen izquierdo/derecho que es más ancho que tu franja */
+            padding-left: 400px; 
+            padding-right: 400px;
         }}
-        /* === FIN DE LA MODIFICACIÓN CLAVE === */
+        
+        /* Ajustamos el tamaño del contenedor interno por si acaso */
+        .block-container {{
+            max-width: 100% !important; 
+        }}
+        /* === FIN DE LA NUEVA MODIFICACIÓN CLAVE === */
         
         </style>
         """,
         unsafe_allow_html=True
     )
-
 
 class MultiStandardAnalyzer:
     def __init__(self):
