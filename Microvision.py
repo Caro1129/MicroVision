@@ -3109,7 +3109,7 @@ elif st.session_state["pagina"] == "parametros":
         # Botón para ir a reporte
         if st.button(" Ver reporte completo", key="btn_ver_reporte"):  # <--- clave única
             st.session_state["pagina"] = "reporte"
-            st.rerun()
+            raise st.script_runner.StopException
             
     # --- PÁGINA DE REPORTE ---
 
@@ -3161,7 +3161,7 @@ elif st.session_state["pagina"] == "reporte":
     with col_back:
         if st.button("⬅ Volver", key="btn_volver_reporte"):  # <--- clave única
             st.session_state["pagina"] = "parametros"
-            st.rerun()
+            raise st.script_runner.StopException
     
     # Recuperar información del estado
     norma = st.session_state.get("norma", "No especificada")
