@@ -110,14 +110,6 @@ def generar_pdf_reporte_completo():
 
     # Función auxiliar para agregar imágenes al PDF
     def agregar_imagen_al_pdf(img_array, caption, story, temp_files):
-    import numpy as np
-    from PIL import Image as PILImage
-    import cv2
-    import tempfile
-    from reportlab.platypus import Image as RLImage
-    from reportlab.lib.units import cm
-    from reportlab.platypus import Paragraph
-    from reportlab.lib.styles import getSampleStyleSheet
 
     # Obtener estilos para el pie de foto
     styles = getSampleStyleSheet()
@@ -173,7 +165,7 @@ def generar_pdf_reporte_completo():
         # Si llegamos aquí, el array ES un numpy array, pero la conversión de color o PIL falló.
         story.append(Paragraph(f"**[ERROR AL CARGAR IMAGEN: {caption}]**", styles["Error"]))
 
-        
+
     # IMÁGENES DE CONTROL (si aplica)
     if es_jis and control_results_list:
         story.append(Paragraph("<b>Muestras CONTROL</b>", styles["Heading3"]))
