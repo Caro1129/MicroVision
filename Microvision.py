@@ -528,6 +528,10 @@ def generar_pdf_reporte_completo():
                     pass
             raise
 
+    doc.build(story)  # 1. Construye el PDF usando el contenido de 'story'
+    buffer.seek(0)    # 2. Rebobina el buffer al inicio para su lectura
+    return buffer     # 3. Devuelve el buffer a Streamlit
+
 def generar_conclusion_texto():
     """Genera texto de conclusión basado en los resultados"""
     norma = st.session_state.get("norma", "")
