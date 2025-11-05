@@ -111,6 +111,14 @@ def generar_pdf_reporte_completo():
     # Función auxiliar para agregar imágenes al PDF
     def agregar_imagen_al_pdf(img_array, caption, story, temp_files):
         """Convierte numpy array a imagen temporal y la agrega al PDF"""
+        # --- VERIFICACIÓN DE DEBUGGING ---
+        if not isinstance(img_array, np.ndarray):
+            print(f"❌ ERROR: La imagen para '{caption}' NO es un array de NumPy. Tipo actual: {type(img_array)}")
+            return
+        if img_array.size == 0:
+            print(f"❌ ERROR: El array de imagen para '{caption}' está vacío (size=0).")
+            return
+        # ---------------------------------
         try:
             if img_array is None:
                 print(f"Imagen vacía: {caption}")
@@ -132,6 +140,14 @@ def generar_pdf_reporte_completo():
             
             # Crear imagen PIL directamente (ya está en RGB)
             pil_img = Image.fromarray(img_rgb)
+
+            # Crea el archivo temporal
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+
+            # --- VERIFICACIÓN DE DEBUGGING ---
+            print(f"✅ Guardando imagen temporal para '{caption}' en la ruta: {tmp.name}")
+            # ---------------------------------
+
             
             # Guardar temporalmente
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
@@ -3807,7 +3823,7 @@ elif st.session_state["pagina"] == "reporte":
                             st.metric("Cobertura fúngica", f"{cobertura:.2f}%")
 
                         with col2:
-                            st.metric("Rating ASTM G21", f"{rating}/4")
+                            st.metric("Rating ASTM G21", f"{rating}")
 
                         with col3:
                             st.markdown(f"**Clasificación:** {color}")
@@ -3972,8 +3988,8 @@ elif st.session_state["pagina"] == "reporte":
                 ).lower()
             else:
                 interpretacion = (
-                    f"no se observó crecimiento visible significativo ({coverage:.2f}% de cobertura). "
-                    f"el material es resistente al ataque de actinomicetos según la norma {norma}."
+                    f"No se observó crecimiento visible significativo ({coverage:.2f}% de cobertura). "
+                    f"El material es resistente al ataque de actinomicetos según la norma {norma}."
                 ).lower()
 
     # ✅ CASO 2: VARIAS RÉPLICAS
@@ -3984,13 +4000,13 @@ elif st.session_state["pagina"] == "reporte":
                 f"El material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}% (de). "
             )
             if media <= 10:
-                interpretacion += "esto indica que el material posee excelente resistencia al crecimiento fúngico."
+                interpretacion += "Esto indica que el material posee excelente resistencia al crecimiento fúngico."
             elif media <= 30:
-                interpretacion += "esto indica que el material presenta resistencia moderada frente al ataque de hongos."
+                interpretacion += "Esto indica que el material presenta resistencia moderada frente al ataque de hongos."
             elif media <= 60:
-                interpretacion += "el material muestra baja resistencia, con crecimiento fúngico apreciable."
+                interpretacion += "El material muestra baja resistencia, con crecimiento fúngico apreciable."
             else:
-                interpretacion += "el material es no resistente, presentando una alta cobertura por hongos."
+                interpretacion += "El material es no resistente, presentando una alta cobertura por hongos."
             interpretacion = interpretacion.lower()
         
         elif "AATCC" in str(norma):
@@ -4018,9 +4034,9 @@ elif st.session_state["pagina"] == "reporte":
                 f"se analizaron {num_replicas} réplicas según la norma astm e1428, obteniendo una cobertura promedio de {media:.2f}% ± {desviacion:.2f}% (de). "
             )
             if media <= 10:
-                interpretacion += "el material es resistente al ataque de actinomicetos."
+                interpretacion += "El material es resistente al ataque de actinomicetos."
             else:
-                interpretacion += "el material presenta susceptibilidad moderada o alta al biodeterioro."
+                interpretacion += "El material presenta susceptibilidad moderada o alta al biodeterioro."
             interpretacion = interpretacion.lower()
 
     else:
