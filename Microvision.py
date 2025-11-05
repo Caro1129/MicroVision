@@ -131,8 +131,15 @@ def generar_pdf_reporte_completo():
 
     # === CONCLUSIÓN ===
     interpretacion = st.session_state.get("interpretacion", "No se ha generado interpretación para este análisis.")
+    
+    # FIX: Convertir las marcas de negrita de Markdown (**) a etiquetas ReportLab (<b>)
+    # El patrón r'\*\*(.*?)\*\*' encuentra cualquier texto rodeado por ** y lo envuelve en <b>...</b>
+    import re
+    interpretacion_rl = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', interpretacion, flags=re.DOTALL)
+
     story.append(Paragraph("Conclusión", estilo_subtitulo))
-    story.append(Paragraph(interpretacion, estilo_justificado))
+    # Usar la versión con etiquetas HTML válidas
+    story.append(Paragraph(interpretacion_rl, estilo_justificado))
     story.append(PageBreak())
 
     # === CONSTRUCCIÓN DEL DOCUMENTO ===
