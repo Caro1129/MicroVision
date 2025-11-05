@@ -2552,10 +2552,22 @@ elif st.session_state["pagina"] == "parametros":
 
             # Mostrar imágenes y métricas (tu código actual)
             st.markdown(f"### Réplica tratada {idx+1}")
+
             cols = st.columns(2)
 
             # **AQUÍ SE INSERTA LA VERIFICACIÓN PARA EVITAR EL TypeError**
             if orig_img is not None:
+                # AÑADA ESTAS LÍNEAS DE DEBUGGING AQUÍ
+                import numpy as np
+                st.write("--- DEBUGGING orig_img ---")
+                st.write(f"Tipo de orig_img: {type(orig_img)}")
+                if isinstance(orig_img, np.ndarray):
+                    st.write(f"Shape (forma) de orig_img: {orig_img.shape}")
+                    st.write(f"Dtype (tipo de datos) de orig_img: {orig_img.dtype}")
+                st.write("--------------------------")
+                # ------------------------------------
+                
+                # LÍNEA 2559 - Donde ocurre el error:
                 cols[0].image(orig_img, caption="Original", use_container_width=True)
             else:
                 cols[0].error(f"❌ Error: No se pudo cargar o procesar la imagen original de la réplica {idx+1}. Revise el archivo.")
