@@ -1775,7 +1775,7 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
     results = replica['results']
 
     st.markdown("#### Imágenes procesadas")
-    cols = st.columns(4)
+    cols = st.columns(2)
     cols[1].image(orig, caption="Original", use_container_width=True)
     #cols[1].image(pca, caption="PCA", use_container_width=True)
     #cols[2].image(ms, caption="MeanShift", use_container_width=True)
@@ -2438,11 +2438,11 @@ elif st.session_state["pagina"] == "parametros":
                 })
 
                 st.markdown(f"### Control réplica {idx+1}")
-                cols = st.columns(4)
-                cols[1].image(ctrl_img_rgb, caption="Original", use_container_width=True)
+                cols = st.columns(2)
+                cols[0].image(ctrl_img_rgb, caption="Original", use_container_width=True)
                 #cols[1].image(ctrl_pca, caption="PCA", use_container_width=True)
                 #cols[2].image(ctrl_ms, caption="MeanShift", use_container_width=True)
-                cols[2].image(ctrl_processed, caption="Colonias detectadas", use_container_width=True)
+                cols[1].image(ctrl_processed, caption="Colonias detectadas", use_container_width=True)
                 st.metric("Colonias detectadas", ctrl_count)
                 st.markdown("---")
 
@@ -2552,11 +2552,11 @@ elif st.session_state["pagina"] == "parametros":
 
             # Mostrar imágenes y métricas (tu código actual)
             st.markdown(f"###  Réplica tratada {idx+1}")
-            cols = st.columns(4)
-            cols[1].image(orig_img, caption="Original", use_container_width=True)
+            cols = st.columns(2)
+            cols[0].image(orig_img, caption="Original", use_container_width=True)
             #cols[1].image(pca, caption="PCA", use_container_width=True)
             #cols[2].image(ms, caption="MeanShift", use_container_width=True)
-            cols[2].image(processed_img, caption="Resultado final", use_container_width=True)
+            cols[1].image(processed_img, caption="Resultado final", use_container_width=True)
 
             # Mostrar métricas según norma
             if 'AATCC' in norma or 'TM147' in norma:
