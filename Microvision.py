@@ -2555,27 +2555,22 @@ elif st.session_state["pagina"] == "parametros":
 
             cols = st.columns(2)
 
-            # **AQUÍ SE INSERTA LA VERIFICACIÓN PARA EVITAR EL TypeError**
-            if orig_img is not None:
-                # AÑADA ESTAS LÍNEAS DE DEBUGGING AQUÍ
-                import numpy as np
-                st.write("--- DEBUGGING orig_img ---")
-                st.write(f"Tipo de orig_img: {type(orig_img)}")
-                if isinstance(orig_img, np.ndarray):
-                    st.write(f"Shape (forma) de orig_img: {orig_img.shape}")
-                    st.write(f"Dtype (tipo de datos) de orig_img: {orig_img.dtype}")
-                st.write("--------------------------")
-                # ------------------------------------
+            # Verificar y convertir la imagen
+            if orig_img is not None and isinstance(orig_img, np.ndarray):
                 
-                # LÍNEA 2559 - Donde ocurre el error:
-                cols[0].image(orig_img, caption="Original", use_container_width=True)
-            else:
-                cols[0].error(f"❌ Error: No se pudo cargar o procesar la imagen original de la réplica {idx+1}. Revise el archivo.")
+                # *** APLICACIÓN DE LA CORRECCIÓN CLAVE: BGR a RGB ***
+                try:
+                    # 1. Convertir de BGR (OpenCV) a RGB (Streamlit/PIL)
+                    orig_img_rgb = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
+                    
+                    # 2. Mostrar la imagen convertida
+                    cols[0].image(orig_img_rgb, caption="Original (Convertido a RGB)", use_container_width=True)
+                
+                except Exception as e:
+                    # Fallback en caso de que la conversión falle
+                    st.error(f"❌ Error al intentar convertir BGR a RGB: {str(e)}. Mostrando imagen sin conversión (puede tener colores incorrectos).")
+                    cols[0].image(orig_img, caption="Original (Sin Conversión)", use_container_width=True)
 
-            if processed_img is not None:
-                cols[1].image(processed_img, caption="Resultado final", use_container_width=True)
-            else:
-                cols[1].warning(f"⚠️ Advertencia: No se pudo generar la imagen procesada para la réplica {idx+1}.")
             # Mostrar métricas según norma
             if 'AATCC' in norma or 'TM147' in norma:
                 halo = results.get('inhibition_halo_mm', 0)
