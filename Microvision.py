@@ -250,6 +250,18 @@ def add_bg_from_local(image_file):
             background-image: url("data:image/png;base64,{encoded}");
             background-size: cover;
         }}
+        
+        /* Esta regla apunta al contenedor principal de todo el contenido de Streamlit */
+        .main .block-container {{
+            /* Ajusta este valor según el ancho de tus franjas laterales */
+            padding-left: 200px; 
+            padding-right: 200px;
+            
+            /* Esto es opcional, pero ayuda a centrar si el fondo no cubre bien */
+            margin: auto; 
+        }}
+        /* === FIN DE LA MODIFICACIÓN CLAVE === */
+        
         </style>
         """,
         unsafe_allow_html=True
@@ -2099,7 +2111,7 @@ if st.session_state["pagina"] == "inicio":
 
 #  PÁGINA DE PARÁMETROS 
 elif st.session_state["pagina"] == "parametros":
-    
+
     add_bg_from_local("Fondo_parametros.png")
 
      # DESCRIPCIÓN DEL APLICATIVO 
