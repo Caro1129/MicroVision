@@ -110,65 +110,70 @@ def generar_pdf_reporte_completo():
 
     # Función auxiliar para agregar imágenes al PDF
     def agregar_imagen_al_pdf(img_array, caption, story, temp_files):
-        """Convierte numpy array a imagen temporal y la agrega al PDF"""
-        # --- VERIFICACIÓN DE DEBUGGING ---
-        if not isinstance(img_array, np.ndarray):
-            print(f"❌ ERROR: La imagen para '{caption}' NO es un array de NumPy. Tipo actual: {type(img_array)}")
-            return
-        if img_array.size == 0:
-            print(f"❌ ERROR: El array de imagen para '{caption}' está vacío (size=0).")
-            return
-        # ---------------------------------
-        try:
-            if img_array is None:
-                print(f"Imagen vacía: {caption}")
-                story.append(Paragraph(f"[Imagen no disponible: {caption}]", styles["Normal"]))
-                return
-            
-            # Verificar tipo de dato
-            if not isinstance(img_array, np.ndarray):
-                print(f"No es numpy array: {type(img_array)}")
-                story.append(Paragraph(f"[Formato incorrecto: {caption}]", styles["Normal"]))
-                return
-            
-            # Las imágenes en session_state ya están en RGB (de load_and_process_image)
-            # Solo necesitamos asegurar que sean uint8
-            if img_array.dtype != np.uint8:
-                img_rgb = (img_array * 255).astype(np.uint8) if img_array.max() <= 1.0 else img_array.astype(np.uint8)
-            else:
-                img_rgb = img_array
-            
-            # Crear imagen PIL directamente (ya está en RGB)
-            pil_img = Image.fromarray(img_rgb)
+    import numpy as np
+    from PIL import Image as PILImage
+    import cv2
+    import tempfile
+    from reportlab.platypus import Image as RLImage
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
 
-            # Crea el archivo temporal
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+    # Obtener estilos para el pie de foto
+    styles = getSampleStyleSheet()
 
-            # --- VERIFICACIÓN DE DEBUGGING ---
-            print(f"✅ Guardando imagen temporal para '{caption}' en la ruta: {tmp.name}")
-            # ---------------------------------
+    # --- VERIFICACIÓN CRÍTICA DEL ARRAY ---
+    if img_array is None:
+        print(f"❌ DEBUG: Imagen nula para: {caption}")
+        return
+    if not isinstance(img_array, np.ndarray):
+        print(f"❌ DEBUG: Imagen para '{caption}' NO es np.ndarray. Tipo: {type(img_array)}")
+        return
+    if img_array.size == 0:
+        print(f"❌ DEBUG: Array de imagen vacío para: {caption}")
+        return
+    # ----------------------------------------
 
-            
-            # Guardar temporalmente
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-            pil_img.save(tmp.name, 'PNG')
-            temp_files.append(tmp.name)
-            
-            print(f"✅ Imagen guardada: {tmp.name} para {caption}")
-            
-            # Agregar al PDF con tamaño controlado
-            from reportlab.platypus import Image as RLImage
-            img_reportlab = RLImage(tmp.name, width=8*cm, height=6*cm)
-            story.append(img_reportlab)
-            story.append(Paragraph(f"<i>{caption}</i>", styles["Normal"]))
-            story.append(Spacer(1, 0.3*cm))
-            
-        except Exception as e:
-            import traceback
-            print(f"❌ Error al agregar imagen: {e}")
-            print(traceback.format_exc())
-            story.append(Paragraph(f"[Error al cargar imagen: {caption}]", styles["Normal"]))
+    try:
+        # 1. Conversión de Color: De BGR (OpenCV por defecto) a RGB (PIL)
+        # Si las imágenes son en escala de grises o ya RGB, esta línea puede fallar.
+        # Si falla, comenta esta línea.
+        if len(img_array.shape) == 3:
+            img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
+        else:
+            img_rgb = img_array # Asumir escala de grises o formato correcto
 
+        # 2. Convertir a objeto PIL (Pillow)
+        pil_img = PILImage.fromarray(img_rgb)
+        
+        # 3. Guardar temporalmente como PNG
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        pil_img.save(tmp.name, 'PNG') 
+        temp_files.append(tmp.name) # Guardar referencia para eliminación posterior
+
+        print(f"✅ DEBUG: Imagen temporal creada en: {tmp.name}")
+
+        # 4. Insertar en ReportLab
+        img_reportlab = RLImage(
+            tmp.name, 
+            width=8*cm, 
+            height=6*cm,
+            # Asegúrate de que las dimensiones sean razonables
+            # Tal vez necesitas usar 'preserveAspectRatio=True' si la imagen se ve distorsionada
+            # preserveAspectRatio=True, 
+            # kind='bound'
+        )
+        
+        story.append(img_reportlab)
+        story.append(Paragraph(f"<i>{caption}</i>", styles["Normal"]))
+        story.append(Spacer(1, 0.5 * cm))
+
+    except Exception as e:
+        print(f"❌ ERROR CRÍTICO al agregar imagen '{caption}': {e}")
+        # Si llegamos aquí, el array ES un numpy array, pero la conversión de color o PIL falló.
+        story.append(Paragraph(f"**[ERROR AL CARGAR IMAGEN: {caption}]**", styles["Error"]))
+
+        
     # IMÁGENES DE CONTROL (si aplica)
     if es_jis and control_results_list:
         story.append(Paragraph("<b>Muestras CONTROL</b>", styles["Heading3"]))
