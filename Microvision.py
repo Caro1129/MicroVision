@@ -2551,13 +2551,19 @@ elif st.session_state["pagina"] == "parametros":
             })
 
             # Mostrar imágenes y métricas (tu código actual)
-            st.markdown(f"###  Réplica tratada {idx+1}")
+            st.markdown(f"### Réplica tratada {idx+1}")
             cols = st.columns(2)
-            cols[0].image(orig_img, caption="Original", use_container_width=True)
-            #cols[1].image(pca, caption="PCA", use_container_width=True)
-            #cols[2].image(ms, caption="MeanShift", use_container_width=True)
-            cols[1].image(processed_img, caption="Resultado final", use_container_width=True)
 
+            # **AQUÍ SE INSERTA LA VERIFICACIÓN PARA EVITAR EL TypeError**
+            if orig_img is not None:
+                cols[0].image(orig_img, caption="Original", use_container_width=True)
+            else:
+                cols[0].error(f"❌ Error: No se pudo cargar o procesar la imagen original de la réplica {idx+1}. Revise el archivo.")
+
+            if processed_img is not None:
+                cols[1].image(processed_img, caption="Resultado final", use_container_width=True)
+            else:
+                cols[1].warning(f"⚠️ Advertencia: No se pudo generar la imagen procesada para la réplica {idx+1}.")
             # Mostrar métricas según norma
             if 'AATCC' in norma or 'TM147' in norma:
                 halo = results.get('inhibition_halo_mm', 0)
