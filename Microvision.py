@@ -3915,7 +3915,7 @@ elif st.session_state["pagina"] == "reporte":
    
     # SECCIÓN 3: CONCLUSIÓN 
     st.markdown("---")
-    st.markdown("##  3. CONCLUSIÓN")
+    st.markdown("## 3. CONCLUSIÓN")
 
     interpretacion = ""
 
@@ -3931,16 +3931,16 @@ elif st.session_state["pagina"] == "reporte":
             halo = results.get("inhibition_halo_mm", 0)
             if halo > 0:
                 interpretacion = (
-                    f"el material evaluado presentó un halo de inhibición de {halo:.2f} mm frente a "
-                    f"*{microorg_selec}*. este resultado indica actividad antibacteriana según la norma "
-                    f"{norma}. la presencia del halo de inhibición demuestra que el material tiene "
-                    f"propiedades que inhiben el crecimiento bacteriano en su entorno inmediato."
-                ).lower()
+                    f"El material evaluado presentó un halo de inhibición de {halo:.2f} mm frente a *{microorg_selec}*. "
+                    f"Este resultado indica actividad antibacteriana según la norma {norma}. "
+                    f"La presencia del halo de inhibición demuestra que el material tiene propiedades que inhiben "
+                    f"el crecimiento de *{microorg_selec}* en su entorno inmediato."
+                )
             else:
                 interpretacion = (
-                    f"no se observó halo de inhibición frente a *{microorg_selec}*, indicando ausencia de actividad antibacteriana "
-                    f"según la norma {norma}. el material no presenta propiedades que inhiban el crecimiento bacteriano."
-                ).lower()
+                    f"No se observó halo de inhibición frente a *{microorg_selec}*, indicando ausencia de actividad antibacteriana "
+                    f"según la norma {norma}. El material no presenta propiedades que inhiban el crecimiento de *{microorg_selec}*."
+                )
 
         elif norma and "ASTM G21" in str(norma):
             rating = results.get("astm_g21_rating", None)
@@ -3954,17 +3954,15 @@ elif st.session_state["pagina"] == "reporte":
             }
             if rating is not None:
                 interpretacion = (
-                    f"el material obtuvo una calificación de {rating} en la escala astm g21-15, "
-                    f"con una cobertura fúngica del {coverage:.2f}%. esto indica que el material es: "
-                    f"{escala_texto.get(rating, 'valor no definido')}. "
+                    f"El material fue ensayado frente a *{microorg_selec}* y obtuvo una calificación de {rating} en la escala ASTM G21-15, "
+                    f"con una cobertura fúngica del {coverage:.2f}%. Esto indica que el material es {escala_texto.get(rating, 'de resistencia no definida')}. "
                 )
                 if rating <= 1:
-                    interpretacion += "el material muestra excelente resistencia al ataque fúngico."
+                    interpretacion += "El material muestra excelente resistencia al ataque fúngico."
                 elif rating == 2:
-                    interpretacion += "el material presenta resistencia moderada, aceptable en ciertas aplicaciones."
+                    interpretacion += "El material presenta resistencia moderada, aceptable en ciertas aplicaciones."
                 else:
-                    interpretacion += "el material presenta baja resistencia, susceptible al deterioro por hongos."
-                interpretacion = interpretacion.lower()
+                    interpretacion += "El material presenta baja resistencia, susceptible al deterioro por hongos."
 
         elif norma and "JIS" in str(norma):
             logR = results.get("log_reduction", 0)
@@ -3973,74 +3971,73 @@ elif st.session_state["pagina"] == "reporte":
             cumple = "cumple" if logR >= 2 else "no cumple"
 
             interpretacion = (
-                f"el material presentó una reducción logarítmica de {logR:.2f} frente a *{microorg_selec}*, "
-                f"con {control_c} colonias en el control y {treated_c} colonias en la tratada. "
-                f"por lo tanto, el material {cumple} con la norma {norma}."
-            ).lower()
+                f"El material presentado fue probado frente a *{microorg_selec}*, mostrando una reducción logarítmica de {logR:.2f}. "
+                f"En el control se observaron {control_c} colonias, mientras que en la muestra tratada se detectaron {treated_c}. "
+                f"Por lo tanto, el material {cumple} con la norma {norma}."
+            )
 
         elif norma and "ASTM E1428" in str(norma):
             growth = results.get("has_visible_growth", False)
             coverage = results.get("coverage_percentage", 0)
             if growth:
                 interpretacion = (
-                    f"se observó crecimiento visible con {coverage:.2f}% de cobertura. "
-                    f"según la norma {norma}, el material no es resistente al ataque de actinomicetos (*{microorg_selec}*)."
-                ).lower()
+                    f"Se observó crecimiento visible de *{microorg_selec}* con {coverage:.2f}% de cobertura. "
+                    f"Según la norma {norma}, el material no es resistente al ataque de actinomicetos."
+                )
             else:
                 interpretacion = (
-                    f"No se observó crecimiento visible significativo ({coverage:.2f}% de cobertura). "
+                    f"No se observó crecimiento visible significativo de *{microorg_selec}* ({coverage:.2f}% de cobertura). "
                     f"El material es resistente al ataque de actinomicetos según la norma {norma}."
-                ).lower()
+                )
 
     # ✅ CASO 2: VARIAS RÉPLICAS
     elif num_replicas > 1:
         if "ASTM G21" in str(norma):
             interpretacion = (
-                f"Se analizaron {num_replicas} réplicas del ensayo según la norma astm g21-15. "
-                f"El material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}% (de). "
+                f"Se analizaron {num_replicas} réplicas del ensayo según la norma ASTM G21-15 frente a *{microorg_selec}*. "
+                f"El material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}% (DE). "
             )
             if media <= 10:
-                interpretacion += "Esto indica que el material posee excelente resistencia al crecimiento fúngico."
+                interpretacion += "Esto indica excelente resistencia al crecimiento fúngico."
             elif media <= 30:
-                interpretacion += "Esto indica que el material presenta resistencia moderada frente al ataque de hongos."
+                interpretacion += "Esto indica resistencia moderada frente al ataque de hongos."
             elif media <= 60:
                 interpretacion += "El material muestra baja resistencia, con crecimiento fúngico apreciable."
             else:
-                interpretacion += "El material es no resistente, presentando una alta cobertura por hongos."
-            interpretacion = interpretacion.lower()
+                interpretacion += "El material es no resistente, presentando alta cobertura por hongos."
         
         elif "AATCC" in str(norma):
             interpretacion = (
-                f"Se analizaron {num_replicas} réplicas según la norma {norma}, con un halo de inhibición promedio de {media:.2f} ± {desviacion:.2f} mm (de). "
+                f"Se analizaron {num_replicas} réplicas según la norma {norma}, frente a *{microorg_selec}*. "
+                f"El halo de inhibición promedio fue de {media:.2f} ± {desviacion:.2f} mm (DE). "
             )
             if media > 0:
-                interpretacion += f"el material muestra actividad antibacteriana efectiva frente a *{microorg_selec}*."
+                interpretacion += f"El material muestra actividad antibacteriana efectiva frente a *{microorg_selec}*."
             else:
-                interpretacion += "no se detectó halo de inhibición significativo, indicando ausencia de actividad antibacteriana."
-            interpretacion = interpretacion.lower()
+                interpretacion += f"No se detectó halo de inhibición significativo, indicando ausencia de actividad antibacteriana frente a *{microorg_selec}*."
 
         elif "JIS" in str(norma):
             interpretacion = (
-                f"el análisis de {num_replicas} réplicas según la norma {norma} mostró una reducción logarítmica promedio de {media:.2f} ± {desviacion:.2f} (de). "
+                f"Se analizaron {num_replicas} réplicas según la norma {norma}, frente a *{microorg_selec}*. "
+                f"La reducción logarítmica promedio fue de {media:.2f} ± {desviacion:.2f} (DE). "
             )
             if media >= 2:
-                interpretacion += "el material cumple con los criterios de eficacia antimicrobiana (r ≥ 2)."
+                interpretacion += "El material cumple con los criterios de eficacia antimicrobiana (R ≥ 2)."
             else:
-                interpretacion += "el material no cumple con los criterios mínimos de eficacia antimicrobiana."
-            interpretacion = interpretacion.lower()
+                interpretacion += "El material no cumple con los criterios mínimos de eficacia antimicrobiana."
 
         elif "ASTM E1428" in str(norma):
             interpretacion = (
-                f"Se analizaron {num_replicas} réplicas según la norma astm e1428, obteniendo una cobertura promedio de {media:.2f}% ± {desviacion:.2f}% (de). "
+                f"Se analizaron {num_replicas} réplicas según la norma ASTM E1428 frente a *{microorg_selec}*. "
+                f"La cobertura promedio fue de {media:.2f}% ± {desviacion:.2f}% (DE). "
             )
             if media <= 10:
                 interpretacion += "El material es resistente al ataque de actinomicetos."
             else:
                 interpretacion += "El material presenta susceptibilidad moderada o alta al biodeterioro."
-            interpretacion = interpretacion.lower()
 
     else:
-        interpretacion = "no se detectaron resultados válidos para generar una conclusión.".lower()
+        interpretacion = "No se detectaron resultados válidos para generar una conclusión."
 
     # Convertir a HTML limpio (sin cambiar el case ya que ya está en minúsculas)
     interpretacion_html = interpretacion.replace('**', '<strong>').replace('*', '<em>').replace('\n\n', '<br><br>')
