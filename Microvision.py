@@ -561,7 +561,7 @@ def generar_conclusion_texto():
     
     else:  # Múltiples réplicas
         if "ASTM G21" in norma:
-            return f"Se analizaron {num_replicas} réplicas del ensayo según la norma astm g21-15. el material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}% (de).".lower()
+            return f"Se analizaron {num_replicas} réplicas del ensayo según la norma ASTM G21-15. el material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}%.".lower()
         
         elif "AATCC" in norma:
             return f"Se analizaron {num_replicas} réplicas según la norma {norma}, con un halo de inhibición promedio de {media:.2f} ± {desviacion:.2f} mm (de).".lower()
@@ -4012,7 +4012,7 @@ elif st.session_state["pagina"] == "reporte":
         
         elif "AATCC" in str(norma):
             interpretacion = (
-                f"se analizaron {num_replicas} réplicas según la norma {norma}, con un halo de inhibición promedio de {media:.2f} ± {desviacion:.2f} mm (de). "
+                f"Se analizaron {num_replicas} réplicas según la norma {norma}, con un halo de inhibición promedio de {media:.2f} ± {desviacion:.2f} mm (de). "
             )
             if media > 0:
                 interpretacion += f"el material muestra actividad antibacteriana efectiva frente a *{microorg_selec}*."
@@ -4032,7 +4032,7 @@ elif st.session_state["pagina"] == "reporte":
 
         elif "ASTM E1428" in str(norma):
             interpretacion = (
-                f"se analizaron {num_replicas} réplicas según la norma astm e1428, obteniendo una cobertura promedio de {media:.2f}% ± {desviacion:.2f}% (de). "
+                f"Se analizaron {num_replicas} réplicas según la norma astm e1428, obteniendo una cobertura promedio de {media:.2f}% ± {desviacion:.2f}% (de). "
             )
             if media <= 10:
                 interpretacion += "El material es resistente al ataque de actinomicetos."
