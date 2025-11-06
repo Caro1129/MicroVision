@@ -545,7 +545,7 @@ def generar_conclusion_texto():
         if "AATCC" in norma:
             halo = results.get("inhibition_halo_mm", 0)
             if halo > 0:
-                return f"El textil evaluado presentó un halo de inhibición de {halo:.2f} mm frente a <i>{microorg}</i>. este resultado indica actividad antibacteriana según la norma {norma}."
+                return f"El textil evaluado presentó un halo de inhibición de {halo:.2f} mm frente a <i>{microorg}</i>. Este resultado indica actividad antibacteriana según la norma {norma}."
             else:
                 return f"No se observó halo de inhibición frente a <i>{microorg}</i>, indicando ausencia de actividad antibacteriana según la norma {norma}."
         
@@ -557,20 +557,19 @@ def generar_conclusion_texto():
         elif "JIS" in norma:
             logR = results.get("log_reduction", 0)
             cumple = "cumple" if logR >= 2 else "no cumple"
-            return f"El textil presentó una reducción logarítmica de {logR:.2f} frente a <i>{microorg}</i>. por lo tanto, el material {cumple} con la norma {norma}."
+            return f"El textil presentó una reducción logarítmica de {logR:.2f} frente a <i>{microorg}</i>. Por lo tanto, el material {cumple} con la norma {norma}."
     
     else:  # Múltiples réplicas
         if "ASTM G21" in norma:
-            return f"Se analizaron {num_replicas} réplicas del ensayo según la norma ASTM G21-15. el material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}%."
+            return f"Se analizaron {num_replicas} réplicas del ensayo según la norma ASTM G21-15. El material presentó una cobertura fúngica promedio de {media:.2f}% ± {desviacion:.2f}%."
         
         elif "AATCC" in norma:
-            return f"Se analizaron {num_replicas} réplicas según la norma {norma}, con un halo de inhibición promedio de {media:.2f} ± {desviacion:.2f} mm (de)."
+            return f"Se analizaron {num_replicas} réplicas según la norma {norma}, con un halo de inhibición promedio de {media:.2f} ± {desviacion:.2f} mm (DE)."
         
         elif "JIS" in norma:
-            return f"El análisis de {num_replicas} réplicas según la norma {norma} mostró una reducción logarítmica promedio de {media:.2f} ± {desviacion:.2f} (de)."
+            return f"El análisis de {num_replicas} réplicas según la norma {norma} mostró una reducción logarítmica promedio de {media:.2f} ± {desviacion:.2f} (DE)."
     
     return "No se detectaron resultados válidos para generar una conclusión."
-
 
 def agregar_test_t_pdf_tabla(story, test_t_results, temp_files, styles):
     """Agrega la sección de Test T al PDF con tabla y gráfica"""
