@@ -1743,7 +1743,7 @@ class MultiStandardAnalyzer:
             
         elif 'JIS' in standard_key or 'Z2801' in standard_key:
             # Contar colonias en la imagen tratada
-            treated_count, treated_colonies = self.count_colonies_opencv(original_img, meanshift_img)
+            treated_count, treated_original, treated_colonies = self.count_colonies_opencv(original_img, meanshift_img)
             print(f"   ✓ Tratada: {treated_count} colonias detectadas")
             
             # Calcular reducción logarítmica
