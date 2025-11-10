@@ -2948,8 +2948,9 @@ elif st.session_state["pagina"] == "parametros":
                     print("⚠️ No se detectó crecimiento fúngico\n")        
 
             elif 'JIS' in norma or 'Z2801' in norma:
-                treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig_img, ms)
-                processed_img = orig_img.copy()
+                # Usar directamente la imagen con colonias detectadas que devuelve la función
+                treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig, ms)
+                processed_img = treated_colonies  # ← CAMBIO: usar directamente la imagen con detección
                 # --- Bloque seguro para dibujar contornos ---
                 valid_contours = []
 
@@ -3657,7 +3658,7 @@ elif st.session_state["pagina"] == "reporte":
                     replica = control_results_list[idx]
                     with col:
                         st.image(
-                            replica['original'],
+                            replica['processed'],  # ← CAMBIO AQUÍ: usar 'processed' en lugar de 'original'
                             use_container_width=True,
                             caption=f"Control {idx+1} | Colonias: {replica.get('count', 'N/A')}"
                         )
@@ -3674,7 +3675,7 @@ elif st.session_state["pagina"] == "reporte":
                     count = replica.get('results', {}).get('treated_count', 'N/A')
                     with col:
                         st.image(
-                            replica['original'],
+                            replica['processed'],  # ← CAMBIO AQUÍ: usar 'processed' en lugar de 'original'
                             use_container_width=True,
                             caption=f"Tratada {idx+1} | Colonias: {count}"
                         )
