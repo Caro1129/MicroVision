@@ -2945,7 +2945,7 @@ elif st.session_state["pagina"] == "parametros":
                     print("⚠️ No se detectó crecimiento fúngico\n")        
 
             elif 'JIS' in norma or 'Z2801' in norma:
-                treated_count, treated_colonies = analyzer.count_colonies_opencv(orig_img, ms)
+                treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig_img, ms)
                 processed_img = orig_img.copy()
                 # --- Bloque seguro para dibujar contornos ---
                 valid_contours = []
