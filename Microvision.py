@@ -1088,45 +1088,52 @@ class MultiStandardAnalyzer:
 
 
 
-    # ========== FUNCIÓN AUXILIAR PARA VISUALIZAR ==========
     def visualizar_colonias_JIS(self, original_img, colonies, count):
         """
-        Crea una visualización colorida de las colonias detectadas
+        Crea una visualización colorida de las colonias detectadas a partir de máscaras binarias.
+        Corrige el error de cv2.drawContours al convertir las máscaras en contornos válidos.
         """
-        # Imagen base
         result = original_img.copy()
-        
-        # Crear overlay translúcido
         overlay = np.zeros_like(result)
-        
-        # Colorear cada colonia
-        for i, colony in enumerate(colonies):
-            # Color verde brillante con transparencia
-            cv2.drawContours(overlay, [colony], -1, (0, 255, 100), -1)
-            
-            # Borde rojo grueso
-            cv2.drawContours(result, [colony], -1, (255, 0, 0), 3)
-            
-            # Numerar colonias (opcional)
-            M = cv2.moments(colony)
+
+        all_contours = []  # para guardar contornos válidos
+
+        for i, colony_mask in enumerate(colonies):
+            # Convertir máscara binaria en contorno
+            contours, _ = cv2.findContours(colony_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours) == 0:
+                continue
+
+            # Tomar el contorno más grande (evita ruido)
+            main_contour = max(contours, key=cv2.contourArea)
+            all_contours.append(main_contour)
+
+            # Dibujar overlay verde con transparencia
+            cv2.drawContours(overlay, [main_contour], -1, (0, 255, 100), -1)
+
+            # Borde rojo
+            cv2.drawContours(result, [main_contour], -1, (255, 0, 0), 3)
+
+            # Numerar colonias
+            M = cv2.moments(main_contour)
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
                 cv2.putText(
-                    result, 
-                    str(i+1), 
-                    (cx-10, cy+10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    0.6, 
-                    (255, 255, 0),  # Amarillo
+                    result,
+                    str(i + 1),
+                    (cx - 10, cy + 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 0),
                     2
                 )
-        
-        # Mezclar overlay
-        if len(colonies) > 0:
+
+        # Mezclar overlay verde translúcido
+        if len(all_contours) > 0:
             result = cv2.addWeighted(result, 0.65, overlay, 0.35, 0)
-        
-        # Agregar contador principal
+
+        # Agregar contador total
         cv2.putText(
             result,
             f"Colonias detectadas: {count}",
@@ -1136,8 +1143,9 @@ class MultiStandardAnalyzer:
             (0, 255, 0),
             4
         )
-        
+
         return result
+
     
 
 
