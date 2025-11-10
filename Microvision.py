@@ -969,16 +969,14 @@ class MultiStandardAnalyzer:
 
 
 
-    import cv2
-    import numpy as np
-    import matplotlib.pyplot as plt
+
 
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False):
         """
         Conteo de colonias optimizado para placas DENSAS mediante el algoritmo Watershed.
-        Corrección: Se asegura que el Watershed y el dibujo se hagan sobre una imagen BGR.
+        Corrige el conteo, asegurando que solo se consideren colonias dentro de la caja de Petri.
         """
-        
+
         # --- 1) Preparación y Enmascaramiento ---
         gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
         h, w = gray.shape
@@ -987,81 +985,98 @@ class MultiStandardAnalyzer:
         blurred = cv2.GaussianBlur(gray, (9, 9), 2)
         circles = cv2.HoughCircles(
             blurred, cv2.HOUGH_GRADIENT, dp=1.2,
-            minDist=min(h,w)//4, param1=50, param2=30,
-            minRadius=int(min(h,w)*0.25), maxRadius=int(min(h,w)*0.55)
+            minDist=min(h, w)//4, param1=50, param2=30,
+            minRadius=int(min(h, w)*0.25), maxRadius=int(min(h, w)*0.55)
         )
 
         mask = np.zeros_like(gray)
-        
         if circles is not None:
             circles = np.uint16(np.around(circles))
-            (x, y, r) = circles[0, 0] 
+            (x, y, r) = circles[0, 0]
             cv2.circle(mask, (x, y), r, (255), thickness=-1)
             gray_processed = cv2.bitwise_and(gray, gray, mask=mask)
         else:
-            gray_processed = gray 
-
+            gray_processed = gray
 
         # --- 2) Umbralización Adaptativa y Morfología ---
         block_size = 61
         C_value = 10
-        
+
         thresh = cv2.adaptiveThreshold(
-            gray_processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            gray_processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, block_size, C_value
-        ) 
+        )
 
-        # Operación de Apertura: 
-        kernel = np.ones((3, 3), np.uint8) 
-        opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2) # Iterations=2
+        kernel = np.ones((3, 3), np.uint8)
+        opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
 
-        
         # --- 3) Preparación de Marcadores para Watershed ---
-
-        # A. Fondo (Background)
-        sure_bg = cv2.dilate(opened, kernel, iterations=3) 
-
-        # B. Primer Plano (Foreground - centro seguro de colonia)
+        sure_bg = cv2.dilate(opened, kernel, iterations=3)
         dist_transform = cv2.distanceTransform(opened, cv2.DIST_L2, 5)
-
-        # AJUSTE FINO: Reducimos el umbral a 0.2 para máxima sensibilidad
-        ret, sure_fg = cv2.threshold(dist_transform, 0.2 * dist_transform.max(), 255, 0) 
+        ret, sure_fg = cv2.threshold(dist_transform, 0.2 * dist_transform.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
-
-        # C. Región Desconocida
         unknown = cv2.subtract(sure_bg, sure_fg)
 
-        
-        # --- 4) Watershed y Conteo Final ---
+        # --- 4) Watershed y Conteo Inicial ---
         ret, markers = cv2.connectedComponents(sure_fg)
-        markers = markers + 1 
+        markers = markers + 1
         markers[unknown == 255] = 0
-        
-        # 💥 CORRECCIÓN CRÍTICA: Base BGR para el Watershed
-        # Usamos la imagen RGB original para que el Watershed pueda dibujar las fronteras correctamente.
-        base_img_watershed = original_img.copy() 
-        markers = cv2.watershed(base_img_watershed, markers) 
 
-        # Contar
-        colonies_count = np.max(markers) - 1 
+        base_img_watershed = original_img.copy()
+        markers = cv2.watershed(base_img_watershed, markers)
 
-        # --- 5) Resultados y Debug ---
-        
-        # El dibujo se hace sobre una copia de la imagen original
+        # --- 4B) Filtrar colonias dentro de la caja de Petri ---
+        plate_mask = np.zeros_like(gray, dtype=np.uint8)
+        if circles is not None:
+            cv2.circle(plate_mask, (x, y), r, 255, -1)
+        else:
+            plate_mask[:] = 255  # Si no hay círculo, usar toda la imagen
+
+        colonies = []
+        unique_labels = np.unique(markers)
+        for label in unique_labels:
+            if label <= 1:  # Ignorar fondo, bordes o regiones pequeñas
+                continue
+            colony_mask = np.uint8(markers == label) * 255
+            overlap = cv2.bitwise_and(colony_mask, plate_mask)
+            area_inside = cv2.countNonZero(overlap)
+            area_total = cv2.countNonZero(colony_mask)
+            if area_total > 30 and (area_inside / area_total) > 0.8:
+                colonies.append(colony_mask)
+
+        colonies_count = len(colonies)
+
+        # --- 5) Dibujar resultados ---
         detected_img = original_img.copy()
-        
-        # Dibujar las líneas divisorias (fronteras de Watershed) en la imagen
-        detected_img[markers == -1] = [0, 255, 0] # El color Verde
+        detected_img[markers == -1] = [0, 255, 0]  # Fronteras (verde)
 
+        # Dibujar contornos de colonias válidas
+        for colony_mask in colonies:
+            contours, _ = cv2.findContours(colony_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(detected_img, contours, -1, (255, 0, 0), 2)  # Borde rojo
+
+        # Contador visual
+        cv2.putText(
+            detected_img,
+            f"Colonias detectadas: {colonies_count}",
+            (30, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (0, 255, 0),
+            3
+        )
+
+        # --- 6) Debug visual ---
         if debug:
             fig, axes = plt.subplots(1, 4, figsize=(18, 5))
             axes[0].imshow(gray_processed, cmap='gray'); axes[0].set_title('1. Imagen Enmascarada')
-            axes[1].imshow(opened, cmap='gray'); axes[1].set_title('2. Umbral Limpio (Apertura)')
-            axes[2].imshow(dist_transform, cmap='jet'); axes[2].set_title(f'3. Transformada de Distancia (Umbral 0.2)')
-            axes[3].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)); axes[3].set_title(f'4. Watershed | Count: {colonies_count}')
+            axes[1].imshow(opened, cmap='gray'); axes[1].set_title('2. Umbral Limpio')
+            axes[2].imshow(dist_transform, cmap='jet'); axes[2].set_title('3. Transformada de Distancia')
+            axes[3].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)); axes[3].set_title(f'4. Resultado Final | Count: {colonies_count}')
             plt.show()
 
         return colonies_count, detected_img
+
 
 
 
