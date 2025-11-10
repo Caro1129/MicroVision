@@ -976,6 +976,10 @@ class MultiStandardAnalyzer:
         Devuelve tanto la imagen original sin modificar como la imagen coloreada con las colonias detectadas.
         """
 
+        import cv2
+        import numpy as np
+        import matplotlib.pyplot as plt
+
         # --- 1) Conversión a escala de grises y preprocesamiento ---
         gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
         h, w = gray.shape
@@ -1019,7 +1023,6 @@ class MultiStandardAnalyzer:
         markers = markers + 1
         markers[unknown == 255] = 0
 
-        # Crear base en BGR para Watershed
         base_img_watershed = cv2.cvtColor(original_img.copy(), cv2.COLOR_RGB2BGR)
         markers = cv2.watershed(base_img_watershed, markers)
 
@@ -1057,19 +1060,19 @@ class MultiStandardAnalyzer:
 
         if len(valid_contours) > 0:
             for i, c in enumerate(valid_contours):
-                # Relleno verde translúcido
-                cv2.drawContours(overlay, [c], -1, (0, 255, 0), -1)
-                # Borde rojo
-                cv2.drawContours(detected_img, [c], -1, (255, 0, 0), 2)
-                # Numerar colonia
+                # Borde verde
+                cv2.drawContours(detected_img, [c], -1, (0, 255, 0), 2)
+                # Centro rojo
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
+                    cv2.circle(detected_img, (cx, cy), 2, (0, 0, 255), -1)
+                    # Numerar colonia
                     cv2.putText(detected_img, str(i + 1), (cx - 10, cy + 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
 
-            detected_img = cv2.addWeighted(detected_img, 0.7, overlay, 0.3, 0)
+            detected_img = cv2.addWeighted(detected_img, 0.8, overlay, 0.2, 0)
         else:
             print("⚠️ No se detectaron contornos válidos para colorear.")
 
@@ -1079,15 +1082,12 @@ class MultiStandardAnalyzer:
             f"Colonias detectadas: {colonies_count}",
             (30, 50),
             cv2.FONT_HERSHEY_SIMPLEX,
-            1.2,
+            1,
             (0, 255, 0),
             3
         )
 
-        # --- 8) Imágenes finales separadas y correctas para Streamlit ---
-        original_rgb = cv2.cvtColor(original_img, cv2.COLOR_RGB2BGR)
-        original_rgb = cv2.cvtColor(original_rgb, cv2.COLOR_BGR2RGB)
-
+        # --- 8) Conversión final a RGB para Streamlit ---
         detected_rgb = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
 
         # --- 9) Modo depuración opcional ---
@@ -1099,7 +1099,8 @@ class MultiStandardAnalyzer:
             axes[3].imshow(detected_rgb); axes[3].set_title(f'4. Colonias detectadas | Count: {colonies_count}')
             plt.show()
 
-        return colonies_count, original_rgb, detected_rgb
+        return colonies_count, original_img, detected_rgb
+
 
 
 
