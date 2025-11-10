@@ -2949,36 +2949,38 @@ elif st.session_state["pagina"] == "parametros":
                     print("⚠️ No se detectó crecimiento fúngico\n")        
 
             elif 'JIS' in norma or 'Z2801' in norma:
-                from PIL import Image
+                import cv2
                 import numpy as np
 
-                if uploaded_file is not None:
-                    image = Image.open(uploaded_file).convert("RGB")
-                    orig = np.array(image)
+                if paths_tratadas and len(paths_tratadas) > 0:
+                    # Cargar la primera imagen tratada guardada
+                    img_path = paths_tratadas[0]
+                    orig = cv2.imread(img_path)
+                    orig = cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)
+
+                    # Procesar con el analizador
                     treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig)
-                else:
-                    st.error("⚠️ No se ha cargado ninguna imagen para analizar.")
-                    st.stop()
-                processed_img = treated_colonies  # ← CAMBIO: usar directamente la imagen con detección
-                # --- Bloque seguro para dibujar contornos ---
-                valid_contours = []
+                    processed_img = treated_colonies  # imagen coloreada
 
-                if treated_colonies is not None:
-                    for item in treated_colonies:
-                        # Caso 1: máscara binaria (0-255)
-                        if isinstance(item, np.ndarray) and item.ndim == 2:
-                            contours, _ = cv2.findContours(item, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                            valid_contours.extend(contours)
-                        # Caso 2: contorno ya válido (forma (n,1,2))
-                        elif isinstance(item, np.ndarray) and item.ndim == 3 and item.shape[1] == 1:
-                            valid_contours.append(item)
-                else:
-                    print("⚠️ treated_colonies es None")
+                    # --- Bloque seguro para dibujar contornos ---
+                    valid_contours = []
 
-                if len(valid_contours) > 0:
-                    cv2.drawContours(processed_img, valid_contours, -1, (255, 0, 0), 2)
+                    if treated_colonies is not None:
+                        for item in treated_colonies:
+                            if isinstance(item, np.ndarray) and item.ndim == 2:
+                                contours, _ = cv2.findContours(item, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                valid_contours.extend(contours)
+                            elif isinstance(item, np.ndarray) and item.ndim == 3 and item.shape[1] == 1:
+                                valid_contours.append(item)
+                    else:
+                        print("⚠️ treated_colonies es None")
+
+                    if len(valid_contours) > 0:
+                        cv2.drawContours(processed_img, valid_contours, -1, (255, 0, 0), 2)
+                    else:
+                        print("⚠️ No hay contornos válidos para dibujar en la imagen.")
                 else:
-                    print("⚠️ No hay contornos válidos para dibujar en la imagen.")
+                    st.error("⚠️ No se encontró ninguna imagen tratada cargada.")
 
             elif 'E1428' in norma:
                 coverage_percentage, colored_img, has_growth = analyzer.analyze_streptomyces_growth(orig_img, ms)
