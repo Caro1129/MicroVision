@@ -2950,7 +2950,7 @@ elif st.session_state["pagina"] == "parametros":
 
             elif 'JIS' in norma or 'Z2801' in norma:
                 # Usar directamente la imagen con colonias detectadas que devuelve la función
-                treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig, ms)
+                treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig)
                 processed_img = treated_colonies  # ← CAMBIO: usar directamente la imagen con detección
                 # --- Bloque seguro para dibujar contornos ---
                 valid_contours = []
