@@ -973,15 +973,15 @@ class MultiStandardAnalyzer:
 
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False):
         """
-        Conteo de colonias optimizado para placas DENSAS mediante Watershed.
-        Incluye filtrado por caja de Petri y corrección de dibujo de contornos.
+        Conteo de colonias optimizado para placas DENSAS mediante el algoritmo Watershed.
+        Incluye filtrado por caja de Petri y visualización de colonias coloreadas.
         """
 
-        # --- 1) Preparación y Enmascaramiento ---
+        # --- 1) Conversión y preparación ---
         gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
         h, w = gray.shape
 
-        # Detección de la caja de Petri
+        # --- 2) Detección de la caja de Petri ---
         blurred = cv2.GaussianBlur(gray, (9, 9), 2)
         circles = cv2.HoughCircles(
             blurred, cv2.HOUGH_GRADIENT, dp=1.2,
@@ -998,7 +998,7 @@ class MultiStandardAnalyzer:
         else:
             gray_processed = gray
 
-        # --- 2) Umbralización Adaptativa y Morfología ---
+        # --- 3) Umbralización y morfología ---
         block_size = 61
         C_value = 10
         thresh = cv2.adaptiveThreshold(
@@ -1008,14 +1008,14 @@ class MultiStandardAnalyzer:
         kernel = np.ones((3, 3), np.uint8)
         opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
 
-        # --- 3) Marcadores para Watershed ---
+        # --- 4) Marcadores para Watershed ---
         sure_bg = cv2.dilate(opened, kernel, iterations=3)
         dist_transform = cv2.distanceTransform(opened, cv2.DIST_L2, 5)
         _, sure_fg = cv2.threshold(dist_transform, 0.2 * dist_transform.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
         unknown = cv2.subtract(sure_bg, sure_fg)
 
-        # --- 4) Watershed ---
+        # --- 5) Aplicar Watershed ---
         _, markers = cv2.connectedComponents(sure_fg)
         markers = markers + 1
         markers[unknown == 255] = 0
@@ -1023,12 +1023,12 @@ class MultiStandardAnalyzer:
         base_img_watershed = original_img.copy()
         markers = cv2.watershed(base_img_watershed, markers)
 
-        # --- 5) Filtrar colonias dentro de la caja de Petri ---
+        # --- 6) Filtrar colonias dentro de la caja ---
         plate_mask = np.zeros_like(gray, dtype=np.uint8)
         if circles is not None:
             cv2.circle(plate_mask, (x, y), r, 255, -1)
         else:
-            plate_mask[:] = 255  # Si no se detecta círculo, usa toda la imagen
+            plate_mask[:] = 255
 
         colonies_masks = []
         unique_labels = np.unique(markers)
@@ -1044,22 +1044,39 @@ class MultiStandardAnalyzer:
 
         colonies_count = len(colonies_masks)
 
-        # --- 6) Dibujar resultados sin errores ---
+        # --- 7) Crear imagen de salida coloreada ---
         detected_img = original_img.copy()
-        detected_img[markers == -1] = [0, 255, 0]  # Fronteras en verde
+        overlay = np.zeros_like(detected_img)
+        detected_img[markers == -1] = [0, 255, 0]  # Frontera verde del Watershed
 
         valid_contours = []
         for mask in colonies_masks:
-            if isinstance(mask, np.ndarray) and mask.ndim == 2:
-                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                valid_contours.extend(contours)
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in contours:
+                if cv2.contourArea(c) > 30:
+                    valid_contours.append(c)
 
+        # Colorear las colonias detectadas
         if len(valid_contours) > 0:
-            cv2.drawContours(detected_img, valid_contours, -1, (255, 0, 0), 2)  # Borde rojo
-        else:
-            print("⚠️ No se detectaron contornos válidos para dibujar.")
+            for i, c in enumerate(valid_contours):
+                # Relleno verde translúcido
+                cv2.drawContours(overlay, [c], -1, (0, 255, 100), -1)
+                # Borde rojo
+                cv2.drawContours(detected_img, [c], -1, (255, 0, 0), 2)
+                # Numerar colonia
+                M = cv2.moments(c)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    cv2.putText(detected_img, str(i + 1), (cx - 10, cy + 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-        # Contador visual
+            # Mezcla del overlay con la imagen original
+            detected_img = cv2.addWeighted(detected_img, 0.7, overlay, 0.3, 0)
+        else:
+            print("⚠️ No se detectaron contornos válidos para colorear.")
+
+        # Contador total
         cv2.putText(
             detected_img,
             f"Colonias detectadas: {colonies_count}",
@@ -1070,7 +1087,7 @@ class MultiStandardAnalyzer:
             3
         )
 
-        # --- 7) Debug visual (opcional) ---
+        # --- 8) Modo depuración (opcional) ---
         if debug:
             fig, axes = plt.subplots(1, 4, figsize=(18, 5))
             axes[0].imshow(gray_processed, cmap='gray'); axes[0].set_title('1. Imagen Enmascarada')
@@ -1080,6 +1097,7 @@ class MultiStandardAnalyzer:
             plt.show()
 
         return colonies_count, detected_img
+
 
 
 
