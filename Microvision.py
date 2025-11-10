@@ -1045,7 +1045,7 @@ class MultiStandardAnalyzer:
         colonies_count = len(colonies_masks)
 
         # --- 7) Crear imagen de salida coloreada ---
-        detected_img = original_img.copy()
+        detected_img = cv2.cvtColor(original_img, cv2.COLOR_RGB2BGR)
         overlay = np.zeros_like(detected_img)
         detected_img[markers == -1] = [0, 255, 0]  # Frontera verde del Watershed
 
@@ -1095,6 +1095,9 @@ class MultiStandardAnalyzer:
             axes[2].imshow(dist_transform, cmap='jet'); axes[2].set_title('3. Transformada de Distancia')
             axes[3].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)); axes[3].set_title(f'4. Resultado Final | Count: {colonies_count}')
             plt.show()
+        
+            # Convertir de nuevo a RGB para mostrar correctamente en Streamlit
+            detected_img = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
 
         return colonies_count, detected_img
 
