@@ -2843,7 +2843,8 @@ elif st.session_state["pagina"] == "parametros":
             st.markdown("##  Imágenes de CONTROL")
             for idx, control_path in enumerate(paths_control):
                 ctrl_img_rgb, ctrl_pca, ctrl_ms = analyzer.load_and_process_image(control_path)
-                ctrl_count, ctrl_colonies = analyzer.count_colonies_opencv(ctrl_img_rgb, ctrl_ms, debug=True)
+                ctrl_count, ctrl_original, ctrl_colonies = analyzer.count_colonies_opencv(ctrl_img_rgb, ctrl_ms, debug=True)
+
 
                 ctrl_processed = ctrl_img_rgb.copy()
                 #cv2.drawContours(ctrl_processed, ctrl_colonies, -1, (0, 255, 0), 2)
