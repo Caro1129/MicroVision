@@ -970,14 +970,13 @@ class MultiStandardAnalyzer:
 
 
 
-
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False):
         """
         Conteo de colonias optimizado para placas DENSAS mediante el algoritmo Watershed.
-        Incluye filtrado por caja de Petri y visualización de colonias coloreadas.
+        Devuelve tanto la imagen original sin modificar como la imagen coloreada con las colonias detectadas.
         """
 
-        # --- 1) Conversión y preparación ---
+        # --- 1) Conversión a escala de grises y preprocesamiento ---
         gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
         h, w = gray.shape
 
@@ -998,7 +997,7 @@ class MultiStandardAnalyzer:
         else:
             gray_processed = gray
 
-        # --- 3) Umbralización y morfología ---
+        # --- 3) Umbralización adaptativa y apertura morfológica ---
         block_size = 61
         C_value = 10
         thresh = cv2.adaptiveThreshold(
@@ -1008,7 +1007,7 @@ class MultiStandardAnalyzer:
         kernel = np.ones((3, 3), np.uint8)
         opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
 
-        # --- 4) Marcadores para Watershed ---
+        # --- 4) Preparar marcadores para Watershed ---
         sure_bg = cv2.dilate(opened, kernel, iterations=3)
         dist_transform = cv2.distanceTransform(opened, cv2.DIST_L2, 5)
         _, sure_fg = cv2.threshold(dist_transform, 0.2 * dist_transform.max(), 255, 0)
@@ -1020,15 +1019,16 @@ class MultiStandardAnalyzer:
         markers = markers + 1
         markers[unknown == 255] = 0
 
-        base_img_watershed = original_img.copy()
+        # Crear base en BGR para Watershed
+        base_img_watershed = cv2.cvtColor(original_img.copy(), cv2.COLOR_RGB2BGR)
         markers = cv2.watershed(base_img_watershed, markers)
 
-        # --- 6) Filtrar colonias dentro de la caja ---
+        # --- 6) Filtrar colonias dentro de la caja de Petri ---
         plate_mask = np.zeros_like(gray, dtype=np.uint8)
         if circles is not None:
             cv2.circle(plate_mask, (x, y), r, 255, -1)
         else:
-            plate_mask[:] = 255
+            plate_mask[:] = 255  # Si no hay círculo, usa toda la imagen
 
         colonies_masks = []
         unique_labels = np.unique(markers)
@@ -1044,10 +1044,9 @@ class MultiStandardAnalyzer:
 
         colonies_count = len(colonies_masks)
 
-            # --- 7) Crear imagen de salida coloreada ---
+        # --- 7) Crear imagen coloreada con colonias ---
         detected_img = cv2.cvtColor(original_img.copy(), cv2.COLOR_RGB2BGR)
         overlay = np.zeros_like(detected_img, dtype=np.uint8)
-        detected_img[markers == -1] = [0, 255, 0]  # Frontera verde
 
         valid_contours = []
         for mask in colonies_masks:
@@ -1056,24 +1055,21 @@ class MultiStandardAnalyzer:
                 if cv2.contourArea(c) > 30:
                     valid_contours.append(c)
 
-        # Colorear colonias con overlay visible
         if len(valid_contours) > 0:
             for i, c in enumerate(valid_contours):
-                # Relleno azul brillante
-                cv2.drawContours(overlay, [c], -1, (255, 0, 0), -1)
-                # Borde fucsia grueso
-                cv2.drawContours(detected_img, [c], -1, (255, 0, 255), 3)
-
-                # Numerar cada colonia
+                # Relleno verde translúcido
+                cv2.drawContours(overlay, [c], -1, (0, 255, 0), -1)
+                # Borde rojo
+                cv2.drawContours(detected_img, [c], -1, (255, 0, 0), 2)
+                # Numerar colonia
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
                     cv2.putText(detected_img, str(i + 1), (cx - 10, cy + 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
 
-            # Mezcla visible del overlay con la imagen original
-            detected_img = cv2.addWeighted(detected_img, 0.6, overlay, 0.6, 0)
+            detected_img = cv2.addWeighted(detected_img, 0.7, overlay, 0.3, 0)
         else:
             print("⚠️ No se detectaron contornos válidos para colorear.")
 
@@ -1088,23 +1084,22 @@ class MultiStandardAnalyzer:
             3
         )
 
-        # Convertir a RGB para mostrar en Streamlit
-        detected_img = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
+        # --- 8) Imágenes finales separadas y correctas para Streamlit ---
+        original_rgb = cv2.cvtColor(original_img, cv2.COLOR_RGB2BGR)
+        original_rgb = cv2.cvtColor(original_rgb, cv2.COLOR_BGR2RGB)
 
+        detected_rgb = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
 
-        # --- 8) Modo depuración (opcional) ---
+        # --- 9) Modo depuración opcional ---
         if debug:
             fig, axes = plt.subplots(1, 4, figsize=(18, 5))
             axes[0].imshow(gray_processed, cmap='gray'); axes[0].set_title('1. Imagen Enmascarada')
             axes[1].imshow(opened, cmap='gray'); axes[1].set_title('2. Umbral Limpio')
             axes[2].imshow(dist_transform, cmap='jet'); axes[2].set_title('3. Transformada de Distancia')
-            axes[3].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)); axes[3].set_title(f'4. Resultado Final | Count: {colonies_count}')
+            axes[3].imshow(detected_rgb); axes[3].set_title(f'4. Colonias detectadas | Count: {colonies_count}')
             plt.show()
-        
-            # Convertir de nuevo a RGB para mostrar correctamente en Streamlit
-            detected_img = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
 
-        return colonies_count, detected_img
+        return colonies_count, original_rgb, detected_rgb
 
 
 
@@ -2327,43 +2322,15 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
 
     elif 'JIS' in norma or 'Z2801' in norma:
         # 🆕 Usar función optimizada para JIS
-        # Contar y obtener colonias válidas
-        treated_count, treated_colonies = analyzer.count_colonies_opencv(orig, ms)
+        # La función devuelve: conteo, imagen original y la imagen con colonias detectadas
+        treated_count, original_rgb, detected_rgb = analyzer.count_colonies_opencv(orig, ms)
 
-        # Copiar imagen original
-        processed_img = orig.copy()
+        # Mostrar ambas imágenes en Streamlit
+        cols[2].image(original_rgb, caption="Original", use_container_width=True)
+        cols[3].image(detected_rgb, caption="Colonias detectadas", use_container_width=True)
 
-        # Crear una máscara vacía para todas las colonias
-        mask_colonies = np.zeros(orig.shape[:2], dtype=np.uint8)
-
-        # Pintar cada colonia en la máscara
-        for i, colony in enumerate(treated_colonies, 1):
-            cv2.drawContours(mask_colonies, [colony], -1, i, -1)  # Cada colonia tiene un valor único
-
-        # Crear imagen en color para superposición
-        overlay = np.zeros_like(processed_img)
-
-        # Asignar un color a cada colonia
-        for i in range(1, len(treated_colonies)+1):
-            overlay[mask_colonies == i] = (0, 255, 0)  # Verde, puedes cambiar por otro color
-
-        # Mezclar overlay con la original usando alpha blending
-        alpha = 0.5
-        processed_img = cv2.addWeighted(processed_img, 1 - alpha, overlay, alpha, 0)
-
-        # Agregar contador
-        cv2.putText(
-            processed_img,
-            f"Colonias: {treated_count}",
-            (20, 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.2,
-            (0, 255, 0),
-            3
-        )
-
-        # Mostrar en Streamlit
-        cols[3].image(processed_img, caption="Resultado final", use_container_width=True)
+        # Mostrar el número total de colonias detectadas
+        st.markdown(f"**Colonias detectadas:** {treated_count}")
 
 def plot_results_by_norm(norma, results):
     norma_lower = str(norma).lower()
