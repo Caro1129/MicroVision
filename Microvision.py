@@ -2953,7 +2953,26 @@ elif st.session_state["pagina"] == "parametros":
             elif 'JIS' in norma or 'Z2801' in norma:
                 treated_count, treated_colonies = analyzer.count_colonies_opencv(orig_img, ms)
                 processed_img = orig_img.copy()
-                cv2.drawContours(processed_img, treated_colonies, -1, (255, 0, 0), 2)
+                # --- Bloque seguro para dibujar contornos ---
+                valid_contours = []
+
+                if treated_colonies is not None:
+                    for item in treated_colonies:
+                        # Caso 1: máscara binaria (0-255)
+                        if isinstance(item, np.ndarray) and item.ndim == 2:
+                            contours, _ = cv2.findContours(item, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            valid_contours.extend(contours)
+                        # Caso 2: contorno ya válido (forma (n,1,2))
+                        elif isinstance(item, np.ndarray) and item.ndim == 3 and item.shape[1] == 1:
+                            valid_contours.append(item)
+                else:
+                    print("⚠️ treated_colonies es None")
+
+                if len(valid_contours) > 0:
+                    cv2.drawContours(processed_img, valid_contours, -1, (255, 0, 0), 2)
+                else:
+                    print("⚠️ No hay contornos válidos para dibujar en la imagen.")
+
             elif 'E1428' in norma:
                 coverage_percentage, colored_img, has_growth = analyzer.analyze_streptomyces_growth(orig_img, ms)
 
