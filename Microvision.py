@@ -2321,16 +2321,19 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
             
 
     elif 'JIS' in norma or 'Z2801' in norma:
-        # 🆕 Usar función optimizada para JIS
-        # La función devuelve: conteo, imagen original y la imagen con colonias detectadas
+        # 🧫 Análisis según norma JIS / Z2801
+
+        # Llamar a la función optimizada de conteo
+        # Retorna: número de colonias, imagen original y imagen coloreada
         treated_count, original_rgb, detected_rgb = analyzer.count_colonies_opencv(orig, ms)
 
-        # Mostrar ambas imágenes en Streamlit
+        # Mostrar la imagen original y la imagen con colonias detectadas
         cols[2].image(original_rgb, caption="Original", use_container_width=True)
         cols[3].image(detected_rgb, caption="Colonias detectadas", use_container_width=True)
 
-        # Mostrar el número total de colonias detectadas
+        # Mostrar el conteo total de colonias
         st.markdown(f"**Colonias detectadas:** {treated_count}")
+
 
 def plot_results_by_norm(norma, results):
     norma_lower = str(norma).lower()
