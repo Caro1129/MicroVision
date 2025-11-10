@@ -1044,10 +1044,10 @@ class MultiStandardAnalyzer:
 
         colonies_count = len(colonies_masks)
 
-        # --- 7) Crear imagen de salida coloreada ---
-        detected_img = cv2.cvtColor(original_img, cv2.COLOR_RGB2BGR)
-        overlay = np.zeros_like(detected_img)
-        detected_img[markers == -1] = [0, 255, 0]  # Frontera verde del Watershed
+            # --- 7) Crear imagen de salida coloreada ---
+        detected_img = cv2.cvtColor(original_img.copy(), cv2.COLOR_RGB2BGR)
+        overlay = np.zeros_like(detected_img, dtype=np.uint8)
+        detected_img[markers == -1] = [0, 255, 0]  # Frontera verde
 
         valid_contours = []
         for mask in colonies_masks:
@@ -1056,27 +1056,28 @@ class MultiStandardAnalyzer:
                 if cv2.contourArea(c) > 30:
                     valid_contours.append(c)
 
-        # Colorear las colonias detectadas
+        # Colorear colonias con overlay visible
         if len(valid_contours) > 0:
             for i, c in enumerate(valid_contours):
-                # Relleno verde translúcido
-                cv2.drawContours(overlay, [c], -1, (0, 255, 100), -1)
-                # Borde rojo
-                cv2.drawContours(detected_img, [c], -1, (255, 0, 0), 2)
-                # Numerar colonia
+                # Relleno azul brillante
+                cv2.drawContours(overlay, [c], -1, (255, 0, 0), -1)
+                # Borde fucsia grueso
+                cv2.drawContours(detected_img, [c], -1, (255, 0, 255), 3)
+
+                # Numerar cada colonia
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
                     cv2.putText(detected_img, str(i + 1), (cx - 10, cy + 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
-            # Mezcla del overlay con la imagen original
-            detected_img = cv2.addWeighted(detected_img, 0.7, overlay, 0.3, 0)
+            # Mezcla visible del overlay con la imagen original
+            detected_img = cv2.addWeighted(detected_img, 0.6, overlay, 0.6, 0)
         else:
             print("⚠️ No se detectaron contornos válidos para colorear.")
 
-        # Contador total
+        # Contador principal
         cv2.putText(
             detected_img,
             f"Colonias detectadas: {colonies_count}",
@@ -1086,6 +1087,10 @@ class MultiStandardAnalyzer:
             (0, 255, 0),
             3
         )
+
+        # Convertir a RGB para mostrar en Streamlit
+        detected_img = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
+
 
         # --- 8) Modo depuración (opcional) ---
         if debug:
