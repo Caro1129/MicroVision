@@ -2949,8 +2949,16 @@ elif st.session_state["pagina"] == "parametros":
                     print("⚠️ No se detectó crecimiento fúngico\n")        
 
             elif 'JIS' in norma or 'Z2801' in norma:
-                # Usar directamente la imagen con colonias detectadas que devuelve la función
-                treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig)
+                from PIL import Image
+                import numpy as np
+
+                if uploaded_file is not None:
+                    image = Image.open(uploaded_file).convert("RGB")
+                    orig = np.array(image)
+                    treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig)
+                else:
+                    st.error("⚠️ No se ha cargado ninguna imagen para analizar.")
+                    st.stop()
                 processed_img = treated_colonies  # ← CAMBIO: usar directamente la imagen con detección
                 # --- Bloque seguro para dibujar contornos ---
                 valid_contours = []
