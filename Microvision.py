@@ -2474,7 +2474,7 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
             orig, 
             ms, 
             debug=False,
-            sensitivity='high'
+            sensitivity='medium'
         )
         
         # Mostrar imágenes
@@ -3014,7 +3014,7 @@ elif st.session_state["pagina"] == "parametros":
                     ctrl_img_rgb, 
                     ctrl_ms, 
                     debug=False,
-                    sensitivity='high'
+                    sensitivity='medium'
                 )
                 
                 # Guardar resultados
