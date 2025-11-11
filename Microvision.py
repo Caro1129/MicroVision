@@ -173,7 +173,7 @@ def generar_pdf_reporte_completo():
             for i, replica in enumerate(control_results_list[:3]):  # Máximo 3 imágenes
                 agregar_imagen_al_pdf(
                     replica['original'],
-                    f"Control replica {i+1} | Colonias: {replica.get('count', 'N/A')}",
+                    #f"Control replica {i+1} | Colonias: {replica.get('count', 'N/A')}",
                     story,
                     temp_files
                 )
@@ -198,7 +198,7 @@ def generar_pdf_reporte_completo():
                     caption += f" | Cobertura: {cobertura:.2f}%"
                 elif 'JIS' in norma:
                     count = results.get('treated_count', 0)
-                    caption += f" | Colonias: {count}"
+                    #caption += f" | Colonias: {count}"
                 
                 agregar_imagen_al_pdf(
                     replica['original'],
@@ -1234,7 +1234,7 @@ class MultiStandardAnalyzer:
         
         # --- 9) Información ---
         font = cv2.FONT_HERSHEY_SIMPLEX
-        text = f"COLONIAS: {colonies_count}"
+        #text = f"COLONIAS: {colonies_count}"
         
         text_size = cv2.getTextSize(text, font, 1.2, 3)[0]
         
