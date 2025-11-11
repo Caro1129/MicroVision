@@ -2473,7 +2473,7 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
         treated_count, treated_original, treated_detected = analyzer.count_colonies_opencv(
             orig, 
             ms, 
-            debug=False
+            debug=False,
             sensitivity='high'
         )
         
@@ -3013,7 +3013,7 @@ elif st.session_state["pagina"] == "parametros":
                 ctrl_count, ctrl_original, ctrl_detected = analyzer.count_colonies_opencv(
                     ctrl_img_rgb, 
                     ctrl_ms, 
-                    debug=False
+                    debug=False,
                     sensitivity='high'
                 )
                 
