@@ -970,64 +970,55 @@ class MultiStandardAnalyzer:
 
 
 
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
+    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='high'):
         """
-        Conteo de colonias optimizado mediante Watershed con parámetros ajustables.
-        
-        Args:
-            original_img: Imagen original RGB
-            segmentacion: Imagen segmentada (opcional)
-            debug: Mostrar pasos intermedios
-            sensitivity: 'low', 'medium', 'high' - sensibilidad de detección
-        
-        Returns:
-            colonies_count: Número de colonias
-            original_img: Imagen original sin modificar
-            detected_img: Imagen con colonias coloreadas y numeradas
+        Conteo optimizado para placas con MUCHAS colonias pequeñas.
         """
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
 
-        # === PARÁMETROS CONFIGURABLES POR SENSIBILIDAD ===
+        # === PARÁMETROS ESPECÍFICOS PARA PLACAS DENSAS ===
         params = {
             'low': {
-                'block_size': 91,
-                'C_value': 12,
-                'threshold_ratio': 0.25,
-                'min_area': 50,
-                'max_area': 8000,
-                'morph_open': 2,
-                'morph_close': 1
+                'block_size': 51,
+                'C_value': 3,
+                'threshold_ratio': 0.08,
+                'min_area': 15,
+                'max_area': 2000,
+                'morph_open': 1,
+                'morph_close': 2,
+                'distance_threshold': 0.3
             },
             'medium': {
-                'block_size': 71,
-                'C_value': 8,
-                'threshold_ratio': 0.15,
-                'min_area': 30,
-                'max_area': 5000,
+                'block_size': 41,
+                'C_value': 2,
+                'threshold_ratio': 0.05,
+                'min_area': 10,
+                'max_area': 1500,
                 'morph_open': 1,
-                'morph_close': 2
+                'morph_close': 1,
+                'distance_threshold': 0.25
             },
             'high': {
-                'block_size': 51,
-                'C_value': 5,
-                'threshold_ratio': 0.10,
-                'min_area': 20,
-                'max_area': 3000,
-                'morph_open': 1,
-                'morph_close': 3
+                'block_size': 31,
+                'C_value': 1,
+                'threshold_ratio': 0.03,
+                'min_area': 8,
+                'max_area': 1000,
+                'morph_open': 0,
+                'morph_close': 1,
+                'distance_threshold': 0.20
             }
         }
         
-        # Seleccionar parámetros
-        p = params.get(sensitivity, params['medium'])
+        p = params.get(sensitivity, params['high'])
         
         print(f"\n{'='*60}")
-        print(f"🔬 CONTEO DE COLONIAS - Sensibilidad: {sensitivity.upper()}")
+        print(f"🔬 CONTEO DE COLONIAS - Modo: {sensitivity.upper()}")
         print(f"{'='*60}")
 
-        # --- 1) Conversión a escala de grises ---
+        # --- 1) Preparar imagen ---
         if len(original_img.shape) == 2:
             gray = original_img
             img_display = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
@@ -1038,59 +1029,50 @@ class MultiStandardAnalyzer:
         h, w = gray.shape
         print(f"📐 Dimensiones: {w}x{h} px")
 
-        # --- 2) Detección ROBUSTA de la caja de Petri ---
-        blurred = cv2.GaussianBlur(gray, (9, 9), 2)
+        # --- 2) Detección de Petri MEJORADA ---
+        # Suavizado preservando bordes
+        blurred = cv2.bilateralFilter(gray, 9, 75, 75)
         
-        # Ecualizar para mejor detección
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-        gray_eq = clahe.apply(blurred)
-        
-        edges = cv2.Canny(gray_eq, 50, 150)
-        
+        # Detección de círculos con parámetros más permisivos
         circles = cv2.HoughCircles(
-            edges,
+            blurred,
             cv2.HOUGH_GRADIENT,
-            dp=1.2,
-            minDist=min(h, w)//4,
-            param1=100,
-            param2=30,
-            minRadius=int(min(h, w)*0.20),
-            maxRadius=int(min(h, w)*0.60)
+            dp=1.0,
+            minDist=min(h, w)//3,
+            param1=50,
+            param2=25,
+            minRadius=int(min(h, w)*0.25),
+            maxRadius=int(min(h, w)*0.55)
         )
 
-        # Crear máscara de la placa
         plate_mask = np.zeros_like(gray, dtype=np.uint8)
-        petri_detected = False
         
         if circles is not None:
             circles = np.uint16(np.around(circles))
-            (x, y, r) = circles[0, 0]
-            
-            # Usar 92% del radio para evitar bordes
-            safe_radius = int(r * 0.92)
+            x, y, r = circles[0, 0]
+            safe_radius = int(r * 0.93)
             cv2.circle(plate_mask, (x, y), safe_radius, 255, -1)
-            
-            gray_processed = cv2.bitwise_and(gray, gray, mask=plate_mask)
-            petri_detected = True
-            print(f"✅ Petri detectada: centro=({x},{y}), radio={r}px (usando {safe_radius}px)")
+            print(f"✅ Petri detectada: radio={r}px (usando {safe_radius}px)")
         else:
-            # Fallback: crear máscara circular centrada
-            cy, cx = h // 2, w // 2
-            r = int(min(h, w) * 0.40)
-            cv2.circle(plate_mask, (cx, cy), r, 255, -1)
-            gray_processed = cv2.bitwise_and(gray, gray, mask=plate_mask)
-            print(f"⚠️  Petri NO detectada, usando máscara centrada: ({cx},{cy}), r={r}px")
-
-        # --- 3) Pre-procesamiento mejorado ---
-        # Aplicar CLAHE solo en área de la placa
-        gray_clahe = clahe.apply(gray_processed)
+            # Usar toda la imagen con pequeño margen
+            margin = int(min(h, w) * 0.05)
+            plate_mask[margin:h-margin, margin:w-margin] = 255
+            print(f"⚠️ Usando imagen completa con margen de {margin}px")
         
-        # Filtro bilateral para suavizar preservando bordes
-        gray_filtered = cv2.bilateralFilter(gray_clahe, 9, 75, 75)
+        gray_processed = cv2.bitwise_and(gray, gray, mask=plate_mask)
 
-        # --- 4) Umbralización adaptativa ---
-        thresh = cv2.adaptiveThreshold(
-            gray_filtered,
+        # --- 3) Pre-procesamiento AGRESIVO ---
+        # CLAHE con parámetros fuertes
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        gray_enhanced = clahe.apply(gray_processed)
+        
+        # Suavizado gaussiano suave
+        gray_smooth = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
+
+        # --- 4) Umbralización MULTI-NIVEL ---
+        # Método 1: Umbral adaptativo fino
+        thresh1 = cv2.adaptiveThreshold(
+            gray_smooth,
             255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV,
@@ -1098,46 +1080,43 @@ class MultiStandardAnalyzer:
             p['C_value']
         )
         
+        # Método 2: Umbral de Otsu
+        _, thresh2 = cv2.threshold(gray_smooth, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        # Combinar ambos umbrales (unión)
+        thresh = cv2.bitwise_or(thresh1, thresh2)
+        
         # Aplicar máscara de placa
         thresh = cv2.bitwise_and(thresh, plate_mask)
         
-        print(f"🎯 Umbralización: block_size={p['block_size']}, C={p['C_value']}")
+        print(f"🎯 Umbralización combinada: block_size={p['block_size']}, C={p['C_value']}")
 
-        # --- 5) Limpieza morfológica ---
-        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
-        kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        # --- 5) Limpieza morfológica MÍNIMA ---
+        if p['morph_open'] > 0:
+            kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_open, iterations=p['morph_open'])
         
-        # Eliminar ruido pequeño
-        opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_small, iterations=p['morph_open'])
-        
-        # Cerrar pequeños huecos
-        opened = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel_medium, iterations=p['morph_close'])
-        
-        print(f"🔧 Morfología: open={p['morph_open']}, close={p['morph_close']}")
+        if p['morph_close'] > 0:
+            kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_close, iterations=p['morph_close'])
 
-        # --- 6) Watershed ---
-        # Fondo seguro
-        sure_bg = cv2.dilate(opened, kernel_medium, iterations=3)
+        # --- 6) Watershed OPTIMIZADO ---
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        sure_bg = cv2.dilate(thresh, kernel_dilate, iterations=2)
         
         # Transformada de distancia
-        dist_transform = cv2.distanceTransform(opened, cv2.DIST_L2, 5)
+        dist_transform = cv2.distanceTransform(thresh, cv2.DIST_L2, 5)
         
-        # Normalizar para visualización
-        dist_normalized = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        
-        # Primer plano seguro
+        # Umbral MUY BAJO para detectar más colonias
         _, sure_fg = cv2.threshold(
             dist_transform,
-            p['threshold_ratio'] * dist_transform.max(),
+            p['distance_threshold'] * dist_transform.max(),
             255,
             0
         )
         sure_fg = np.uint8(sure_fg)
         
-        # Región desconocida
         unknown = cv2.subtract(sure_bg, sure_fg)
-        
-        print(f"💧 Watershed: threshold_ratio={p['threshold_ratio']}")
 
         # Marcadores
         num_labels, markers = cv2.connectedComponents(sure_fg)
@@ -1146,88 +1125,69 @@ class MultiStandardAnalyzer:
 
         # Aplicar watershed
         if len(img_display.shape) == 2:
-            img_for_watershed = cv2.cvtColor(img_display, cv2.COLOR_GRAY2BGR)
+            img_watershed = cv2.cvtColor(img_display, cv2.COLOR_GRAY2BGR)
         else:
-            img_for_watershed = img_display.copy()
+            img_watershed = img_display.copy()
         
-        markers = cv2.watershed(img_for_watershed, markers)
+        markers = cv2.watershed(img_watershed, markers)
         
-        print(f"🏷️  Marcadores iniciales: {num_labels}")
+        print(f"💧 Watershed: {num_labels} marcadores iniciales")
 
-        # --- 7) Filtrado inteligente de colonias ---
+        # --- 7) FILTRADO MUY PERMISIVO ---
         unique_labels = np.unique(markers)
         
         valid_colonies = []
-        rejected = {'too_small': 0, 'too_large': 0, 'out_of_plate': 0, 'border': 0}
+        rejected = {'too_small': 0, 'too_large': 0, 'out_of_plate': 0}
         
         for label in unique_labels:
-            if label == -1:  # Borde de watershed
-                rejected['border'] += 1
-                continue
-            if label <= 1:  # Background
+            if label <= 1:
                 continue
             
-            # Máscara de esta colonia
             colony_mask = np.uint8(markers == label) * 255
-            
-            # Calcular área
             area = cv2.countNonZero(colony_mask)
             
-            # Filtro por tamaño
+            # Filtros MUY permisivos
             if area < p['min_area']:
                 rejected['too_small'] += 1
                 continue
+            
             if area > p['max_area']:
                 rejected['too_large'] += 1
                 continue
             
-            # Verificar que está dentro de la placa
+            # Verificar que esté dentro de la placa (60% es suficiente)
             overlap = cv2.bitwise_and(colony_mask, plate_mask)
             overlap_ratio = cv2.countNonZero(overlap) / area if area > 0 else 0
             
-            if overlap_ratio < 0.70:  # Al menos 70% dentro
+            if overlap_ratio < 0.60:
                 rejected['out_of_plate'] += 1
                 continue
-            
-            # Validar forma (rechazar líneas o formas muy irregulares)
-            contours, _ = cv2.findContours(colony_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if len(contours) > 0:
-                cnt = contours[0]
-                perimeter = cv2.arcLength(cnt, True)
-                if perimeter > 0:
-                    circularity = 4 * np.pi * area / (perimeter * perimeter)
-                    # Rechazar formas muy irregulares (circularity muy bajo)
-                    if circularity < 0.2:
-                        continue
             
             valid_colonies.append(colony_mask)
         
         colonies_count = len(valid_colonies)
         
-        # Reporte de filtrado
-        print(f"\n📊 RESULTADOS DEL FILTRADO:")
-        print(f"   ✅ Colonias válidas: {colonies_count}")
+        print(f"\n📊 RESULTADOS:")
+        print(f"   ✅ Colonias detectadas: {colonies_count}")
         print(f"   ❌ Rechazadas:")
-        print(f"      - Muy pequeñas (< {p['min_area']} px): {rejected['too_small']}")
-        print(f"      - Muy grandes (> {p['max_area']} px): {rejected['too_large']}")
+        print(f"      - Muy pequeñas: {rejected['too_small']}")
+        print(f"      - Muy grandes: {rejected['too_large']}")
         print(f"      - Fuera de placa: {rejected['out_of_plate']}")
-        print(f"      - Bordes: {rejected['border']}")
 
-        # --- 8) Visualización con colores ---
+        # --- 8) VISUALIZACIÓN OPTIMIZADA ---
         if len(img_display.shape) == 2:
             detected_img = cv2.cvtColor(img_display, cv2.COLOR_GRAY2RGB)
         else:
             detected_img = img_display.copy()
         
-        # Crear overlay para semi-transparencia
         overlay = detected_img.copy()
         
-        # Colores alternados para mejor visualización
+        # Colores vibrantes
         colors = [
-            (0, 255, 100),   # Verde claro
-            (100, 255, 255), # Cyan
-            (255, 200, 100), # Naranja claro
-            (200, 100, 255), # Violeta
+            (0, 255, 100),    # Verde brillante
+            (100, 200, 255),  # Azul claro
+            (255, 150, 100),  # Naranja
+            (200, 100, 255),  # Violeta
         ]
         
         for i, colony_mask in enumerate(valid_colonies):
@@ -1237,132 +1197,99 @@ class MultiStandardAnalyzer:
                 continue
             
             main_contour = max(contours, key=cv2.contourArea)
-            
-            # Color alternado
             color = colors[i % len(colors)]
             
-            # 1. Relleno semi-transparente
+            # Relleno semi-transparente
             cv2.drawContours(overlay, [main_contour], -1, color, -1)
             
-            # 2. Borde azul
-            cv2.drawContours(detected_img, [main_contour], -1, (255, 50, 50), 2)
+            # Borde rojo FINO
+            cv2.drawContours(detected_img, [main_contour], -1, (255, 0, 0), 1)
             
-            # 3. Centro y número
+            # Centro y número
             M = cv2.moments(main_contour)
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
                 
-                # Punto central rojo
-                cv2.circle(detected_img, (cx, cy), 4, (0, 0, 255), -1)
+                # Punto central pequeño
+                cv2.circle(detected_img, (cx, cy), 2, (0, 0, 255), -1)
                 
-                # Número con fondo
-                text = str(i + 1)
+                # Número PEQUEÑO
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.6
-                thickness = 2
-                text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+                font_scale = 0.35
+                thickness = 1
                 
-                # Rectángulo de fondo para el número
-                cv2.rectangle(
-                    detected_img,
-                    (cx - text_size[0]//2 - 3, cy - text_size[1]//2 - 3),
-                    (cx + text_size[0]//2 + 3, cy + text_size[1]//2 + 3),
-                    (0, 0, 0),
-                    -1
-                )
-                
-                # Texto amarillo
                 cv2.putText(
                     detected_img,
-                    text,
-                    (cx - text_size[0]//2, cy + text_size[1]//2),
+                    str(i + 1),
+                    (cx - 5, cy + 5),
                     font,
                     font_scale,
-                    (0, 255, 255),
+                    (255, 255, 0),
                     thickness
                 )
         
-        # Mezclar overlay (35% transparencia)
-        detected_img = cv2.addWeighted(detected_img, 0.65, overlay, 0.35, 0)
+        # Mezcla con más transparencia (40%)
+        detected_img = cv2.addWeighted(detected_img, 0.6, overlay, 0.4, 0)
         
-        # --- 9) Agregar información en la imagen ---
-        # Fondo para el contador
-        info_height = 80
-        info_bg = np.zeros((info_height, w, 3), dtype=np.uint8)
-        info_bg[:] = (30, 30, 30)  # Gris oscuro
-        
-        # Texto principal: contador
-        text_main = f"COLONIAS: {colonies_count}"
+        # --- 9) Información ---
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 1.2
-        thickness = 3
+        text = f"COLONIAS: {colonies_count}"
         
-        text_size = cv2.getTextSize(text_main, font, font_scale, thickness)[0]
-        text_x = (w - text_size[0]) // 2
+        text_size = cv2.getTextSize(text, font, 1.2, 3)[0]
         
+        # Fondo negro para el texto
+        cv2.rectangle(
+            detected_img,
+            (5, 5),
+            (text_size[0] + 25, text_size[1] + 25),
+            (0, 0, 0),
+            -1
+        )
+        
+        # Texto verde brillante
         cv2.putText(
-            info_bg,
-            text_main,
-            (text_x, 50),
+            detected_img,
+            text,
+            (15, text_size[1] + 15),
             font,
-            font_scale,
+            1.2,
             (0, 255, 0),
-            thickness
+            3
         )
         
-        # Texto secundario: parámetros
-        text_params = f"Sensibilidad: {sensitivity.upper()} | Area: {p['min_area']}-{p['max_area']} px"
-        font_scale_small = 0.5
-        thickness_small = 1
-        
-        cv2.putText(
-            info_bg,
-            text_params,
-            (10, 25),
-            font,
-            font_scale_small,
-            (150, 150, 150),
-            thickness_small
-        )
-        
-        # Concatenar info con imagen
-        detected_img = np.vstack([info_bg, detected_img])
-        
-        # Dibujar círculo de la placa si fue detectada
-        if petri_detected:
-            cv2.circle(detected_img, (x, y + info_height), safe_radius, (0, 255, 255), 2)
+        # Dibujar círculo de la placa si fue detectado
+        if circles is not None:
+            cv2.circle(detected_img, (x, y), safe_radius, (0, 255, 255), 2)
 
-        # --- 10) Modo Debug ---
+        # --- 10) Debug ---
         if debug:
-            fig, axes = plt.subplots(3, 3, figsize=(18, 18))
+            fig, axes = plt.subplots(2, 4, figsize=(20, 10))
             
             axes[0, 0].imshow(gray, cmap='gray')
             axes[0, 0].set_title('1. Original Gray')
             
-            axes[0, 1].imshow(plate_mask, cmap='gray')
-            axes[0, 1].set_title('2. Plate Mask')
+            axes[0, 1].imshow(gray_enhanced, cmap='gray')
+            axes[0, 1].set_title('2. CLAHE Enhanced')
             
-            axes[0, 2].imshow(gray_filtered, cmap='gray')
-            axes[0, 2].set_title('3. Filtered')
+            axes[0, 2].imshow(thresh1, cmap='gray')
+            axes[0, 2].set_title('3. Adaptive Threshold')
+            
+            axes[0, 3].imshow(thresh2, cmap='gray')
+            axes[0, 3].set_title('4. Otsu Threshold')
             
             axes[1, 0].imshow(thresh, cmap='gray')
-            axes[1, 0].set_title('4. Threshold')
+            axes[1, 0].set_title('5. Combined Threshold')
             
-            axes[1, 1].imshow(opened, cmap='gray')
-            axes[1, 1].set_title('5. Morphology')
+            dist_normalized = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+            axes[1, 1].imshow(dist_normalized, cmap='jet')
+            axes[1, 1].set_title('6. Distance Transform')
             
-            axes[1, 2].imshow(dist_normalized, cmap='jet')
-            axes[1, 2].set_title('6. Distance Transform')
+            axes[1, 2].imshow(sure_fg, cmap='gray')
+            axes[1, 2].set_title('7. Sure Foreground')
             
-            axes[2, 0].imshow(sure_fg, cmap='gray')
-            axes[2, 0].set_title('7. Sure Foreground')
-            
-            axes[2, 1].imshow(cv2.cvtColor(markers.astype(np.uint8), cv2.COLOR_GRAY2RGB))
-            axes[2, 1].set_title('8. Watershed Markers')
-            
-            axes[2, 2].imshow(detected_img)
-            axes[2, 2].set_title(f'9. RESULT: {colonies_count} colonias')
+            axes[1, 3].imshow(detected_img)
+            axes[1, 3].set_title(f'8. RESULT: {colonies_count} colonias')
             
             for ax in axes.flat:
                 ax.axis('off')
@@ -2547,6 +2474,7 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
             orig, 
             ms, 
             debug=False
+            sensitivity='high'
         )
         
         # Mostrar imágenes
@@ -3086,6 +3014,7 @@ elif st.session_state["pagina"] == "parametros":
                     ctrl_img_rgb, 
                     ctrl_ms, 
                     debug=False
+                    sensitivity='high'
                 )
                 
                 # Guardar resultados
