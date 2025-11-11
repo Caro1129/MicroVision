@@ -3835,7 +3835,7 @@ elif st.session_state["pagina"] == "reporte":
                         st.image(
                             replica['processed'],  # ← CAMBIO AQUÍ: usar 'processed' en lugar de 'original'
                             use_container_width=True,
-                            caption=f"Control {idx+1} | Colonias: {replica.get('count', 'N/A')}"
+                            #caption=f"Control {idx+1} | Colonias: {replica.get('count', 'N/A')}"
                         )
 
         # ----- TRATADAS -----
@@ -3852,7 +3852,7 @@ elif st.session_state["pagina"] == "reporte":
                         st.image(
                             replica['processed'],  # ← CAMBIO AQUÍ: usar 'processed' en lugar de 'original'
                             use_container_width=True,
-                            caption=f"Tratada {idx+1} | Colonias: {count}"
+                            #caption=f"Tratada {idx+1} | Colonias: {count}"
                         )
 
     # === PARA OTRAS NORMAS (solo tratadas) ===
