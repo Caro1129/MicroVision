@@ -972,16 +972,19 @@ class MultiStandardAnalyzer:
 
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False):
         """
-        Conteo de colonias optimizado para placas DENSAS mediante el algoritmo Watershed.
-        Devuelve tanto la imagen original sin modificar como la imagen coloreada con las colonias detectadas.
+        Conteo de colonias optimizado mediante Watershed.
+        Retorna: conteo, imagen original, imagen con colonias coloreadas
         """
-
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
 
-        # --- 1) Conversión a escala de grises y preprocesamiento ---
-        gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
+        # --- 1) Conversión a escala de grises ---
+        if len(original_img.shape) == 2:
+            gray = original_img
+        else:
+            gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
+        
         h, w = gray.shape
 
         # --- 2) Detección de la caja de Petri ---
@@ -992,178 +995,208 @@ class MultiStandardAnalyzer:
             minRadius=int(min(h, w)*0.25), maxRadius=int(min(h, w)*0.55)
         )
 
-        mask = np.zeros_like(gray)
+        # Crear máscara de la placa
+        plate_mask = np.zeros_like(gray, dtype=np.uint8)
         if circles is not None:
             circles = np.uint16(np.around(circles))
             (x, y, r) = circles[0, 0]
-            cv2.circle(mask, (x, y), r, (255), thickness=-1)
-            gray_processed = cv2.bitwise_and(gray, gray, mask=mask)
+            cv2.circle(plate_mask, (x, y), int(r * 0.95), 255, -1)  # 95% del radio
+            gray_processed = cv2.bitwise_and(gray, gray, mask=plate_mask)
+            print(f"✓ Petri detectada: centro=({x},{y}), radio={r}px")
         else:
+            # Si no detecta círculo, usar toda la imagen
+            plate_mask[:] = 255
             gray_processed = gray
+            print("⚠️ No se detectó círculo, usando imagen completa")
 
-        # --- 3) Umbralización adaptativa y apertura morfológica ---
-        block_size = 61
-        C_value = 10
+        # --- 3) Umbralización adaptativa MEJORADA ---
+        # Ajustar parámetros según densidad de colonias
+        block_size = 71  # Aumentado para mejor adaptación
+        C_value = 8      # Reducido para ser más sensible
+        
         thresh = cv2.adaptiveThreshold(
             gray_processed, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, block_size, C_value
         )
-        kernel = np.ones((3, 3), np.uint8)
-        opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+        
+        # --- 4) Limpieza morfológica MEJORADA ---
+        kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+        kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (4, 4))
+        
+        # Eliminar ruido pequeño
+        opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_small, iterations=1)
+        # Cerrar pequeños huecos dentro de colonias
+        opened = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel_medium, iterations=2)
 
-        # --- 4) Preparar marcadores para Watershed ---
-        sure_bg = cv2.dilate(opened, kernel, iterations=3)
+        # --- 5) Preparar marcadores para Watershed MEJORADO ---
+        # Fondo seguro (dilatación)
+        sure_bg = cv2.dilate(opened, kernel_medium, iterations=3)
+        
+        # Transformada de distancia
         dist_transform = cv2.distanceTransform(opened, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist_transform, 0.2 * dist_transform.max(), 255, 0)
+        
+        # Normalizar para mejor visualización
+        dist_normalized = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        
+        # Primer plano seguro (umbral más bajo para colonias juntas)
+        threshold_ratio = 0.15  # Reducido de 0.2 a 0.15 para detectar más colonias
+        _, sure_fg = cv2.threshold(dist_transform, threshold_ratio * dist_transform.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
+        
+        # Región desconocida
         unknown = cv2.subtract(sure_bg, sure_fg)
 
-        # --- 5) Aplicar Watershed ---
+        # --- 6) Aplicar Watershed ---
         _, markers = cv2.connectedComponents(sure_fg)
         markers = markers + 1
         markers[unknown == 255] = 0
 
-        base_img_watershed = cv2.cvtColor(original_img.copy(), cv2.COLOR_RGB2BGR)
-        markers = cv2.watershed(base_img_watershed, markers)
-
-        # --- 6) Filtrar colonias dentro de la caja de Petri ---
-        plate_mask = np.zeros_like(gray, dtype=np.uint8)
-        if circles is not None:
-            cv2.circle(plate_mask, (x, y), r, 255, -1)
+        # Convertir a BGR para watershed (necesita 3 canales)
+        if len(original_img.shape) == 2:
+            img_for_watershed = cv2.cvtColor(original_img, cv2.COLOR_GRAY2BGR)
         else:
-            plate_mask[:] = 255  # Si no hay círculo, usa toda la imagen
+            img_for_watershed = original_img.copy()
+        
+        markers = cv2.watershed(img_for_watershed, markers)
 
-        colonies_masks = []
+        # --- 7) Filtrar y contar colonias MEJORADO ---
         unique_labels = np.unique(markers)
+        
+        # Almacenar máscaras válidas
+        valid_colonies = []
+        
         for label in unique_labels:
-            if label <= 1:
+            if label <= 1:  # Ignorar background y bordes (-1, 0, 1)
                 continue
+            
+            # Crear máscara para esta colonia
             colony_mask = np.uint8(markers == label) * 255
+            
+            # Calcular área
+            area = cv2.countNonZero(colony_mask)
+            
+            # Filtrar por tamaño (ajustar según tus imágenes)
+            min_area = 30   # Píxeles mínimos
+            max_area = 5000 # Píxeles máximos (evitar detecciones gigantes)
+            
+            if area < min_area or area > max_area:
+                continue
+            
+            # Verificar que está dentro de la placa
             overlap = cv2.bitwise_and(colony_mask, plate_mask)
-            area_inside = cv2.countNonZero(overlap)
-            area_total = cv2.countNonZero(colony_mask)
-            if area_total > 30 and (area_inside / area_total) > 0.8:
-                colonies_masks.append(colony_mask)
+            overlap_ratio = cv2.countNonZero(overlap) / area
+            
+            if overlap_ratio > 0.7:  # Al menos 70% dentro de la placa
+                valid_colonies.append(colony_mask)
+        
+        colonies_count = len(valid_colonies)
+        print(f"✓ Colonias detectadas: {colonies_count}")
 
-        colonies_count = len(colonies_masks)
-
-        # --- 7) Crear imagen coloreada con colonias ---
-        detected_img = cv2.cvtColor(original_img.copy(), cv2.COLOR_RGB2BGR)
-        overlay = np.zeros_like(detected_img, dtype=np.uint8)
-
-        valid_contours = []
-        for mask in colonies_masks:
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in contours:
-                if cv2.contourArea(c) > 30:
-                    valid_contours.append(c)
-
-        if len(valid_contours) > 0:
-            for i, c in enumerate(valid_contours):
-                # Borde verde
-                cv2.drawContours(detected_img, [c], -1, (0, 255, 0), 2)
-                # Centro rojo
-                M = cv2.moments(c)
-                if M["m00"] != 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
-                    cv2.circle(detected_img, (cx, cy), 2, (0, 0, 255), -1)
-                    # Numerar colonia
-                    cv2.putText(detected_img, str(i + 1), (cx - 10, cy + 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
-
-            detected_img = cv2.addWeighted(detected_img, 0.8, overlay, 0.2, 0)
+        # --- 8) Crear imagen COLOREADA con colonias ---
+        # Copiar imagen original
+        if len(original_img.shape) == 2:
+            detected_img = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
         else:
-            print("⚠️ No se detectaron contornos válidos para colorear.")
-
-        # Contador principal
-        cv2.putText(
-            detected_img,
-            f"Colonias detectadas: {colonies_count}",
-            (30, 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (0, 255, 0),
-            3
-        )
-
-        # --- 8) Conversión final a RGB para Streamlit ---
-        detected_rgb = cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
-
-        # --- 9) Modo depuración opcional ---
-        if debug:
-            fig, axes = plt.subplots(1, 4, figsize=(18, 5))
-            axes[0].imshow(gray_processed, cmap='gray'); axes[0].set_title('1. Imagen Enmascarada')
-            axes[1].imshow(opened, cmap='gray'); axes[1].set_title('2. Umbral Limpio')
-            axes[2].imshow(dist_transform, cmap='jet'); axes[2].set_title('3. Transformada de Distancia')
-            axes[3].imshow(detected_rgb); axes[3].set_title(f'4. Colonias detectadas | Count: {colonies_count}')
-            plt.show()
-
-        return colonies_count, original_img, detected_rgb
-
-
-
-
-
-
-
-    def visualizar_colonias_JIS(self, original_img, colonies, count):
-        """
-        Crea una visualización colorida de las colonias detectadas a partir de máscaras binarias.
-        Corrige el error de cv2.drawContours al convertir las máscaras en contornos válidos.
-        """
-        result = original_img.copy()
-        overlay = np.zeros_like(result)
-
-        all_contours = []  # para guardar contornos válidos
-
-        for i, colony_mask in enumerate(colonies):
-            # Convertir máscara binaria en contorno
+            detected_img = original_img.copy()
+        
+        # Crear overlay semi-transparente
+        overlay = detected_img.copy()
+        
+        # Procesar cada colonia válida
+        for i, colony_mask in enumerate(valid_colonies):
+            # Encontrar contornos de esta colonia
             contours, _ = cv2.findContours(colony_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
             if len(contours) == 0:
                 continue
-
-            # Tomar el contorno más grande (evita ruido)
+            
+            # Tomar el contorno principal
             main_contour = max(contours, key=cv2.contourArea)
-            all_contours.append(main_contour)
-
-            # Dibujar overlay verde con transparencia
+            
+            # 1. Rellenar colonia con color verde semi-transparente
             cv2.drawContours(overlay, [main_contour], -1, (0, 255, 100), -1)
-
-            # Borde rojo
-            cv2.drawContours(result, [main_contour], -1, (255, 0, 0), 3)
-
-            # Numerar colonias
+            
+            # 2. Dibujar borde azul grueso
+            cv2.drawContours(detected_img, [main_contour], -1, (255, 0, 0), 2)
+            
+            # 3. Marcar centro con punto rojo
             M = cv2.moments(main_contour)
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
+                cv2.circle(detected_img, (cx, cy), 3, (0, 0, 255), -1)
+                
+                # 4. Numerar colonia (amarillo)
                 cv2.putText(
-                    result,
+                    detected_img,
                     str(i + 1),
                     (cx - 10, cy + 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 0),
+                    0.5,
+                    (0, 255, 255),  # Amarillo
                     2
                 )
-
-        # Mezclar overlay verde translúcido
-        if len(all_contours) > 0:
-            result = cv2.addWeighted(result, 0.65, overlay, 0.35, 0)
-
-        # Agregar contador total
+        
+        # Mezclar overlay con imagen original (30% transparencia)
+        detected_img = cv2.addWeighted(detected_img, 0.7, overlay, 0.3, 0)
+        
+        # --- 9) Agregar contador en la imagen ---
+        # Fondo semi-transparente para el texto
+        text = f"Colonias: {colonies_count}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1.0
+        thickness = 3
+        text_size = cv2.getTextSize(text, font, font_scale, thickness)[0]
+        
+        # Rectángulo de fondo
+        cv2.rectangle(
+            detected_img,
+            (10, 10),
+            (text_size[0] + 30, text_size[1] + 30),
+            (0, 0, 0),
+            -1
+        )
+        
+        # Texto principal
         cv2.putText(
-            result,
-            f"Colonias detectadas: {count}",
-            (30, 50),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1.3,
-            (0, 255, 0),
-            4
+            detected_img,
+            text,
+            (20, text_size[1] + 20),
+            font,
+            font_scale,
+            (0, 255, 0),  # Verde
+            thickness
         )
 
-        return result
+        # --- 10) Modo Debug (opcional) ---
+        if debug:
+            fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+            axes[0, 0].imshow(gray_processed, cmap='gray')
+            axes[0, 0].set_title('1. Gray Masked')
+            
+            axes[0, 1].imshow(thresh, cmap='gray')
+            axes[0, 1].set_title('2. Adaptive Threshold')
+            
+            axes[0, 2].imshow(opened, cmap='gray')
+            axes[0, 2].set_title('3. Morphology')
+            
+            axes[1, 0].imshow(dist_normalized, cmap='jet')
+            axes[1, 0].set_title('4. Distance Transform')
+            
+            axes[1, 1].imshow(sure_fg, cmap='gray')
+            axes[1, 1].set_title('5. Sure Foreground')
+            
+            axes[1, 2].imshow(detected_img)
+            axes[1, 2].set_title(f'6. Result: {colonies_count} colonias')
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
+
+        return colonies_count, original_img, detected_img
+
+
+
 
     
 
@@ -1744,20 +1777,23 @@ class MultiStandardAnalyzer:
             
         elif 'JIS' in standard_key or 'Z2801' in standard_key:
             # Contar colonias en la imagen tratada
-            treated_count, treated_original, treated_colonies = self.count_colonies_opencv(original_img, meanshift_img)
+            treated_count, treated_original, treated_detected = self.count_colonies_opencv(
+                original_img, 
+                meanshift_img, 
+                debug=False
+            )
+            
             print(f"   ✓ Tratada: {treated_count} colonias detectadas")
             
             # Calcular reducción logarítmica
             log_reduction = None
             if actual_control_count is not None and actual_control_count > 0:
-                # Evitar división por cero usando max(1, x)
                 treated_for_calc = max(1, treated_count)
                 control_for_calc = max(1, actual_control_count)
                 log_reduction = math.log10(control_for_calc) - math.log10(treated_for_calc)
                 print(f"    Reducción log: {log_reduction:.2f}")
-                print(f"    Control={control_for_calc}, Tratada={treated_for_calc}")
             else:
-                print("    No se pudo calcular reducción log: control count inválido")
+                print("    ⚠️ No se pudo calcular reducción log: control count inválido")
             
             results.update({
                 'treated_count': treated_count,
@@ -2321,17 +2357,29 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
             print("⚠️ No se detectó crecimiento fúngico\n")
             
 
+    # ===== PROCESAR TRATADAS =====
     elif 'JIS' in norma or 'Z2801' in norma:
-        # 🧫 Análisis según norma JIS / Z2801
-
-        # Llamar a la función optimizada de conteo
-        # Retorna: número de colonias, imagen original y imagen coloreada
-        treated_count, original_rgb, detected_rgb = analyzer.count_colonies_opencv(orig, ms)
-
-        # Mostrar la imagen original y la imagen con colonias detectadas
-        cols[2].image(original_rgb, caption="Original", use_container_width=True)
-        cols[3].image(detected_rgb, caption="Colonias detectadas", use_container_width=True)
-
+        # Contar colonias
+        treated_count, treated_original, treated_detected = analyzer.count_colonies_opencv(
+            orig, 
+            ms, 
+            debug=False
+        )
+        
+        # Mostrar imágenes
+        cols = st.columns(2)
+        cols[0].image(treated_original, caption="Original", use_container_width=True)
+        cols[1].image(treated_detected, caption=f"Colonias: {treated_count}", use_container_width=True)
+        
+        # Guardar en lista
+        treated_results_list.append({
+            'original': treated_original,
+            'pca': pca,
+            'meanshift': ms,
+            'processed': treated_detected,  # ← Imagen coloreada
+            'results': results
+        })
+        
         # Mostrar el conteo total de colonias
         st.markdown(f"**Colonias detectadas:** {treated_count}")
 
@@ -2843,30 +2891,34 @@ elif st.session_state["pagina"] == "parametros":
 
 
         #  PROCESAR CONTROLES (solo si existen) 
+        # ===== PROCESAR CONTROLES =====
         if paths_control:
-            st.markdown("##  Imágenes de CONTROL")
+            st.markdown("## 📊 Imágenes de CONTROL")
             for idx, control_path in enumerate(paths_control):
+                # Cargar y procesar
                 ctrl_img_rgb, ctrl_pca, ctrl_ms = analyzer.load_and_process_image(control_path)
-                ctrl_count, ctrl_original, ctrl_colonies = analyzer.count_colonies_opencv(ctrl_img_rgb, ctrl_ms, debug=True)
-
-
-                ctrl_processed = ctrl_img_rgb.copy()
-                #cv2.drawContours(ctrl_processed, ctrl_colonies, -1, (0, 255, 0), 2)
-
+                
+                # CONTAR COLONIAS (con debug opcional)
+                ctrl_count, ctrl_original, ctrl_detected = analyzer.count_colonies_opencv(
+                    ctrl_img_rgb, 
+                    ctrl_ms, 
+                    debug=False
+                )
+                
+                # Guardar resultados
                 control_results_list.append({
                     'original': ctrl_img_rgb,
                     'pca': ctrl_pca,
                     'meanshift': ctrl_ms,
-                    'processed': ctrl_processed,
+                    'processed': ctrl_detected,  # ← Imagen ya coloreada
                     'count': ctrl_count
                 })
 
+                # Mostrar
                 st.markdown(f"### Control réplica {idx+1}")
                 cols = st.columns(2)
-                cols[0].image(ctrl_img_rgb, caption="Original", use_container_width=True)
-                #cols[1].image(ctrl_pca, caption="PCA", use_container_width=True)
-                #cols[2].image(ctrl_ms, caption="MeanShift", use_container_width=True)
-                cols[1].image(ctrl_processed, caption="Colonias detectadas", use_container_width=True)
+                cols[0].image(ctrl_original, caption="Original", use_container_width=True)
+                cols[1].image(ctrl_detected, caption=f"Colonias detectadas: {ctrl_count}", use_container_width=True)
                 st.metric("Colonias detectadas", ctrl_count)
                 st.markdown("---")
 
