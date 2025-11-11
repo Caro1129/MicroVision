@@ -1962,7 +1962,7 @@ class MultiStandardAnalyzer:
             treated_count, treated_original, treated_detected = self.count_colonies_opencv(
                 original_img, 
                 meanshift_img, 
-                debug=False
+                debug=False,
                 sensitivity=sensitivity_level 
             )
             
