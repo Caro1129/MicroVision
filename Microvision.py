@@ -977,6 +977,12 @@ class MultiStandardAnalyzer:
         import numpy as np
         import streamlit as st
 
+         # Si no se pasó el parámetro 'debug', se usa un checkbox dentro de la función
+        if debug is None:
+            debug = st.checkbox("🔍 Mostrar imágenes intermedias", key="debug_checkbox_opencv")
+
+
+
         st.write("🔬 **Conteo de colonias calibrado para placas densas (80–200 colonias)**")
 
         # --- 1) Preparar imagen ---
@@ -989,7 +995,7 @@ class MultiStandardAnalyzer:
             gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
 
         h, w = gray.shape
-        st.write(f"📐 Tamaño imagen: {w}×{h}px")
+        st.caption(f"📐 Tamaño imagen: {w}×{h}px")
 
         # --- 2) Detección automática de la placa ---
         gray_blur = cv2.medianBlur(gray, 7)
@@ -1019,7 +1025,7 @@ class MultiStandardAnalyzer:
 
         mean_intensity = np.mean(blur)
         if mean_intensity > 127:
-            st.write("🟡 Fondo claro detectado → Invirtiendo imagen")
+            st.info("🟡 Fondo claro detectado → Invirtiendo imagen")
             blur = cv2.bitwise_not(blur)
 
         # --- 4) BINARIZACIÓN ---
@@ -1057,7 +1063,7 @@ class MultiStandardAnalyzer:
         colonies_count = len(valid_contours)
         st.success(f"✅ **Colonias detectadas: {colonies_count}**")
 
-        # --- 7) Dibujar resultado final ---
+        # --- 7) Imagen final ---
         detected_img = img_rgb.copy()
         for i, c in enumerate(valid_contours):
             M = cv2.moments(c)
@@ -1068,25 +1074,27 @@ class MultiStandardAnalyzer:
                 cv2.circle(detected_img, (cx, cy), radius, (0, 255, 0), 2)
         cv2.circle(detected_img, plate_center, plate_radius, (255, 255, 0), 2)
 
-        # --- 8) Mostrar imágenes de depuración (solo si debug=True) ---
+        # --- 8) Mostrar imágenes de depuración ---
         if debug:
-            st.write("### 🔍 Imágenes intermedias del proceso:")
+            st.markdown("### 🔍 Etapas intermedias del procesamiento")
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.image(blur, caption="🔹 Imagen preprocesada (blur)", use_column_width=True, channels="GRAY")
+                st.image(blur, caption="🔹 Imagen preprocesada (Blur)", use_container_width=True, channels="GRAY")
             with col2:
-                st.image(otsu, caption="🔹 Umbral Otsu (binaria)", use_column_width=True, channels="GRAY")
+                st.image(otsu, caption="🔹 Umbral Otsu (Binaria)", use_container_width=True, channels="GRAY")
             with col3:
-                st.image(opening, caption="🔹 Limpieza morfológica (opening)", use_column_width=True, channels="GRAY")
+                st.image(opening, caption="🔹 Limpieza morfológica (Opening)", use_container_width=True, channels="GRAY")
 
-        # --- 9) Imagen final ---
-        st.image(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB), caption=f"🧫 Resultado final: {colonies_count} colonias", use_column_width=True)
+        # --- 9) Mostrar imagen final ---
+        st.markdown("### 🧫 Resultado final")
+        st.image(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB),
+                caption=f"Colonias detectadas: {colonies_count}",
+                use_container_width=True)
+        
+        ctrl_count, ctrl_original, ctrl_detected = analyzer.count_colonies_opencv(img)
+
 
         return colonies_count, original_img, cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
-
-
-
-
 
 
 
