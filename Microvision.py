@@ -1021,7 +1021,7 @@ class MultiStandardAnalyzer:
 
         # --- 3️⃣ Preprocesamiento ---
         masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(6, 6))
         enhanced = clahe.apply(cv2.GaussianBlur(masked, (3, 3), 0))
 
         # --- 4️⃣ Binarización adaptativa ---
@@ -1056,8 +1056,9 @@ class MultiStandardAnalyzer:
             mask = np.uint8(markers == label) * 255
             area = cv2.countNonZero(mask)
             mean_intensity = cv2.mean(enhanced, mask=mask)[0]
-            if mean_intensity > 200:  # demasiado claro, probablemente un reflejo
+            if mean_intensity > 240 or mean_intensity < 50:
                 continue
+
 
             if area < p['min_area'] or area > p['max_area']:
                 continue
