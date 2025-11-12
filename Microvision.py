@@ -1068,7 +1068,7 @@ class MultiStandardAnalyzer:
                 cv2.circle(detected_img, (cx, cy), radius, (0, 255, 0), 2)
         cv2.circle(detected_img, plate_center, plate_radius, (255, 255, 0), 2)
 
-        # --- 8) Mostrar imágenes de depuración en Streamlit ---
+        # --- 8) Mostrar imágenes de depuración (solo si debug=True) ---
         if debug:
             st.write("### 🔍 Imágenes intermedias del proceso:")
             col1, col2, col3 = st.columns(3)
@@ -1078,9 +1078,7 @@ class MultiStandardAnalyzer:
                 st.image(otsu, caption="🔹 Umbral Otsu (binaria)", use_column_width=True, channels="GRAY")
             with col3:
                 st.image(opening, caption="🔹 Limpieza morfológica (opening)", use_column_width=True, channels="GRAY")
-       
-        debug_mode = st.checkbox("🔍 Mostrar imágenes intermedias")
-        colonies, _, result_img = analyzer.count_colonies_opencv(img, debug=debug_mode)
+
         # --- 9) Imagen final ---
         st.image(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB), caption=f"🧫 Resultado final: {colonies_count} colonias", use_column_width=True)
 
