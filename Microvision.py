@@ -975,126 +975,90 @@ class MultiStandardAnalyzer:
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         import cv2
         import numpy as np
-        import streamlit as st
 
-         # Si no se pasó el parámetro 'debug', se usa un checkbox dentro de la función
-        if debug is None:
-            debug = st.checkbox("🔍 Mostrar imágenes intermedias", key="debug_checkbox_opencv")
-
-
-
-        st.write("🔬 **Conteo de colonias calibrado para placas densas (80–200 colonias)**")
+        print("\n🔬 Conteo de colonias - Detección simplificada por blobs")
 
         # --- 1) Preparar imagen ---
-        img = original_img.copy()
-        if len(img.shape) == 2:
-            gray = img
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+        if len(original_img.shape) == 2:
+            gray = original_img
+            img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
         else:
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
+            img_rgb = original_img.copy()
 
-        h, w = gray.shape
-        st.caption(f"📐 Tamaño imagen: {w}×{h}px")
+        # --- 2) Detectar borde de la placa ---
+        hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+        lower_blue = np.array([90, 30, 40])
+        upper_blue = np.array([140, 255, 255])
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
-        # --- 2) Detección automática de la placa ---
-        gray_blur = cv2.medianBlur(gray, 7)
-        circles = cv2.HoughCircles(
-            gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=100,
-            param1=100, param2=30,
-            minRadius=int(min(h, w) * 0.35),
-            maxRadius=int(min(h, w) * 0.48)
-        )
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+        plate_mask = cv2.bitwise_not(blue_mask)
 
-        plate_mask = np.zeros_like(gray, dtype=np.uint8)
-        if circles is not None:
-            circles = np.uint16(np.around(circles))
-            (x, y, r) = circles[0, 0]
-            cv2.circle(plate_mask, (x, y), r, 255, -1)
-            plate_center, plate_radius = (x, y), r
+        contours_plate, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours_plate:
+            largest_contour = max(contours_plate, key=cv2.contourArea)
+            plate_mask = np.zeros_like(gray, dtype=np.uint8)
+            cv2.drawContours(plate_mask, [largest_contour], -1, 255, -1)
+            kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (60, 60))
+            plate_mask = cv2.erode(plate_mask, kernel_erode, iterations=1)
         else:
-            (x, y), r = (w // 2, h // 2), int(min(h, w) * 0.45)
-            cv2.circle(plate_mask, (x, y), r, 255, -1)
-            plate_center, plate_radius = (x, y), r
+            plate_mask = np.ones_like(gray, dtype=np.uint8) * 255
 
-        # --- 3) PRE-PROCESAMIENTO ---
-        gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray_masked)
-        blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        # --- 3) Preprocesamiento ---
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        gray_enhanced = clahe.apply(gray)
+        blur = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
 
-        mean_intensity = np.mean(blur)
-        if mean_intensity > 127:
-            st.info("🟡 Fondo claro detectado → Invirtiendo imagen")
+        # Invertir si el fondo es oscuro
+        mean_intensity = np.mean(blur[plate_mask == 255])
+        if mean_intensity < 127:
             blur = cv2.bitwise_not(blur)
 
-        # --- 4) BINARIZACIÓN ---
-        _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        kernel = np.ones((3, 3), np.uint8)
-        opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
+        # --- 4) Detección de blobs ---
+        blob_params = cv2.SimpleBlobDetector_Params()
+        blob_params.filterByColor = True
+        blob_params.blobColor = 255
+        blob_params.minThreshold = 10
+        blob_params.maxThreshold = 250
+        blob_params.filterByArea = True
+        blob_params.minArea = 20
+        blob_params.maxArea = 6000
+        blob_params.filterByCircularity = False
+        blob_params.filterByConvexity = False
+        blob_params.filterByInertia = False
 
-        # --- 5) Watershed ---
-        sure_bg = cv2.dilate(opening, kernel, iterations=3)
-        dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist_transform, 0.35 * dist_transform.max(), 255, 0)
-        sure_fg = np.uint8(sure_fg)
-        unknown = cv2.subtract(sure_bg, sure_fg)
+        detector = cv2.SimpleBlobDetector_create(blob_params)
+        keypoints = detector.detect(blur)
 
-        _, markers = cv2.connectedComponents(sure_fg)
-        markers = markers + 1
-        markers[unknown == 255] = 0
-        img_ws = cv2.cvtColor(blur, cv2.COLOR_GRAY2BGR)
-        markers = cv2.watershed(img_ws, markers)
-        img_ws[markers == -1] = [255, 0, 0]
+        # --- 5) Filtrar blobs fuera de la placa ---
+        valid_colonies = []
+        for kp in keypoints:
+            x, y = int(kp.pt[0]), int(kp.pt[1])
+            if plate_mask[y, x] == 255:
+                valid_colonies.append(kp)
 
-        # --- 6) Contornos finales ---
-        contours, _ = cv2.findContours(sure_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        valid_contours = []
-        for c in contours:
-            area = cv2.contourArea(c)
-            if 30 < area < 6000:
-                M = cv2.moments(c)
-                if M["m00"] != 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
-                    if plate_mask[cy, cx] == 255:
-                        valid_contours.append(c)
+        colonies_count = len(valid_colonies)
+        print(f"✅ Colonias detectadas: {colonies_count}")
 
-        colonies_count = len(valid_contours)
-        st.success(f"✅ **Colonias detectadas: {colonies_count}**")
-
-        # --- 7) Imagen final ---
+        # --- 6) Visualización final ---
         detected_img = img_rgb.copy()
-        for i, c in enumerate(valid_contours):
-            M = cv2.moments(c)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                radius = int(np.sqrt(cv2.contourArea(c) / np.pi))
-                cv2.circle(detected_img, (cx, cy), radius, (0, 255, 0), 2)
-        cv2.circle(detected_img, plate_center, plate_radius, (255, 255, 0), 2)
+        for i, kp in enumerate(valid_colonies):
+            x, y = int(kp.pt[0]), int(kp.pt[1])
+            radius = int(kp.size / 2)
+            cv2.circle(detected_img, (x, y), radius, (0, 255, 0), 2)
+            cv2.putText(detected_img, str(i+1), (x-10, y-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 1)
 
-        # --- 8) Mostrar imágenes de depuración ---
-        if debug:
-            st.markdown("### 🔍 Etapas intermedias del procesamiento")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.image(blur, caption="🔹 Imagen preprocesada (Blur)", use_container_width=True, channels="GRAY")
-            with col2:
-                st.image(otsu, caption="🔹 Umbral Otsu (Binaria)", use_container_width=True, channels="GRAY")
-            with col3:
-                st.image(opening, caption="🔹 Limpieza morfológica (Opening)", use_container_width=True, channels="GRAY")
+        text = f"Colonias: {colonies_count}"
+        cv2.rectangle(detected_img, (5,5), (230,40), (0,0,0), -1)
+        cv2.putText(detected_img, text, (15,30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
 
-        # --- 9) Mostrar imagen final ---
-        st.markdown("### 🧫 Resultado final")
-        st.image(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB),
-                caption=f"Colonias detectadas: {colonies_count}",
-                use_container_width=True)
-        
-        ctrl_count, ctrl_original, ctrl_detected = analyzer.count_colonies_opencv(img)
+        return colonies_count, original_img, detected_img
 
-
-        return colonies_count, original_img, cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
 
 
 
