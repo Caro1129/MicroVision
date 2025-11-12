@@ -972,116 +972,146 @@ class MultiStandardAnalyzer:
 
     
 
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False):
+    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
+        import traceback
+        import os
+        from PIL import Image
+        import streamlit as st
 
-        print("\n🔬 Conteo optimizado para colonias claras sobre fondo oscuro")
+        try:
+            print("\n🔬 Conteo de colonias calibrado para placas densas (80–200 colonias)")
 
-        # --- 1) Preparar imagen ---
-        img = original_img.copy()
-        if len(img.shape) == 2:
-            gray = img
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-        else:
-            img_rgb = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
+            # --- 1) Preparar imagen ---
+            img = original_img.copy()
+            if len(img.shape) == 2:
+                gray = img
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+            else:
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                gray = cv2.cvtColor(img_rgb, cv2.COLOR_BGR2GRAY)
 
-        h, w = gray.shape
-        print(f"📐 Tamaño imagen: {w}x{h}px")
+            h, w = gray.shape
+            print(f"📐 Tamaño imagen: {w}x{h}px")
 
-        # --- 2) Detección automática de la placa ---
-        gray_blur = cv2.medianBlur(gray, 7)
-        circles = cv2.HoughCircles(
-            gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=100,
-            param1=100, param2=30,
-            minRadius=int(min(h, w) * 0.35),
-            maxRadius=int(min(h, w) * 0.48)
-        )
+            # --- 2) Detección automática de la placa ---
+            gray_blur = cv2.medianBlur(gray, 7)
+            circles = cv2.HoughCircles(
+                gray_blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=100,
+                param1=100, param2=30,
+                minRadius=int(min(h, w) * 0.35),
+                maxRadius=int(min(h, w) * 0.48)
+            )
 
-        plate_mask = np.zeros_like(gray, dtype=np.uint8)
-        if circles is not None:
-            circles = np.uint16(np.around(circles))
-            (x, y, r) = circles[0, 0]
-            cv2.circle(plate_mask, (x, y), r, 255, -1)
-            plate_center, plate_radius = (x, y), r
-        else:
-            (x, y), r = (w // 2, h // 2), int(min(h, w) * 0.45)
-            cv2.circle(plate_mask, (x, y), r, 255, -1)
-            plate_center, plate_radius = (x, y), r
+            plate_mask = np.zeros_like(gray, dtype=np.uint8)
+            if circles is not None:
+                circles = np.uint16(np.around(circles))
+                (x, y, r) = circles[0, 0]
+                cv2.circle(plate_mask, (x, y), r, 255, -1)
+                plate_center, plate_radius = (x, y), r
+            else:
+                (x, y), r = (w // 2, h // 2), int(min(h, w) * 0.45)
+                cv2.circle(plate_mask, (x, y), r, 255, -1)
+                plate_center, plate_radius = (x, y), r
 
-        # --- 3) Preprocesamiento ---
-        gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray_masked)
-        blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
+            # --- 3) PRE-PROCESAMIENTO ---
+            gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray_masked)
+            blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
 
-        # --- 4) Umbralización invertida (colonias claras) ---
-        # 🔁 Invertimos el umbral para que las colonias sean blancas
-        _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            cv2.imwrite("debug1_blur.png", blur)
 
-        # Limpieza y separación
-        kernel = np.ones((3, 3), np.uint8)
-        opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
-        sure_bg = cv2.dilate(opening, kernel, iterations=3)
-        dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist_transform, 0.25 * dist_transform.max(), 255, 0)
-        sure_fg = np.uint8(sure_fg)
-        unknown = cv2.subtract(sure_bg, sure_fg)
+            # --- 4) BINARIZACIÓN (colonias claras sobre fondo oscuro) ---
+            _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            cv2.imwrite("debug2_otsu.png", otsu)
 
-        # --- 5) Watershed ---
-        _, markers = cv2.connectedComponents(sure_fg)
-        markers = markers + 1
-        markers[unknown == 255] = 0
-        img_ws = cv2.cvtColor(blur, cv2.COLOR_GRAY2BGR)
-        markers = cv2.watershed(img_ws, markers)
-        img_ws[markers == -1] = [255, 0, 0]
+            # Si el resultado está invertido (colonias negras), invertir:
+            white_ratio = np.mean(otsu) / 255
+            if white_ratio < 0.5:
+                otsu = cv2.bitwise_not(otsu)
+                print("🧠 Imagen invertida automáticamente para detectar colonias claras")
 
-        # --- 6) Contornos finales ---
-        contours, _ = cv2.findContours(sure_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        valid_contours = []
-        for c in contours:
-            area = cv2.contourArea(c)
-            if 20 < area < 10000:  # área más amplia para colonias pequeñas o grandes
+            kernel = np.ones((3, 3), np.uint8)
+            opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
+            cv2.imwrite("debug3_opening.png", opening)
+
+            sure_bg = cv2.dilate(opening, kernel, iterations=3)
+            dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
+            _, sure_fg = cv2.threshold(dist_transform, 0.25 * dist_transform.max(), 255, 0)
+            sure_fg = np.uint8(sure_fg)
+            unknown = cv2.subtract(sure_bg, sure_fg)
+
+            # --- 5) Watershed ---
+            _, markers = cv2.connectedComponents(sure_fg)
+            markers = markers + 1
+            markers[unknown == 255] = 0
+
+            img_ws = cv2.cvtColor(blur, cv2.COLOR_GRAY2BGR)
+            markers = cv2.watershed(img_ws, markers)
+            img_ws[markers == -1] = [255, 0, 0]
+
+            # --- 6) Contornos finales ---
+            contours, _ = cv2.findContours(sure_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            valid_contours = []
+            for c in contours:
+                area = cv2.contourArea(c)
+                if 30 < area < 6000:
+                    M = cv2.moments(c)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        if plate_mask[cy, cx] == 255:
+                            valid_contours.append(c)
+
+            colonies_count = len(valid_contours)
+            print(f"✅ Colonias detectadas: {colonies_count}")
+
+            # --- 7) Visualización ---
+            detected_img = img_rgb.copy()
+            for i, c in enumerate(valid_contours):
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
-                    if plate_mask[cy, cx] == 255:
-                        valid_contours.append(c)
+                    radius = int(np.sqrt(cv2.contourArea(c) / np.pi))
+                    cv2.circle(detected_img, (cx, cy), radius, (0, 255, 0), 2)
+                    cv2.putText(detected_img, str(i + 1), (cx - 5, cy - 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
 
-        colonies_count = len(valid_contours)
-        print(f"✅ Colonias detectadas: {colonies_count}")
+            cv2.circle(detected_img, plate_center, plate_radius, (255, 255, 0), 2)
+            text = f"COLONIAS: {colonies_count}"
+            cv2.rectangle(detected_img, (5, 5), (250, 45), (0, 0, 0), -1)
+            cv2.putText(detected_img, text, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # --- 7) Visualización ---
-        detected_img = img_rgb.copy()
-        for i, c in enumerate(valid_contours):
-            M = cv2.moments(c)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                radius = int(np.sqrt(cv2.contourArea(c) / np.pi))
-                cv2.circle(detected_img, (cx, cy), radius, (0, 255, 0), 2)
-        cv2.circle(detected_img, plate_center, plate_radius, (255, 255, 0), 2)
+            # --- 8) Debug opcional en Streamlit ---
+            if debug:
+                st.subheader("🔎 Imágenes de diagnóstico")
+                for name in ["debug1_blur.png", "debug2_otsu.png", "debug3_opening.png"]:
+                    if os.path.exists(name):
+                        st.image(Image.open(name), caption=name, use_container_width=True)
 
-        text = f"COLONIAS: {colonies_count}"
-        cv2.rectangle(detected_img, (5, 5), (250, 45), (0, 0, 0), -1)
-        cv2.putText(detected_img, text, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+                ax[0].imshow(otsu, cmap='gray'); ax[0].set_title('Umbral Otsu')
+                ax[1].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
+                ax[1].set_title(f'Detectadas: {colonies_count}')
+                for a in ax: a.axis('off')
+                st.pyplot(fig)
 
-        # --- 8) Debug opcional ---
-        if debug:
-            fig, ax = plt.subplots(1, 4, figsize=(20, 6))
-            ax[0].imshow(gray, cmap='gray'); ax[0].set_title('Original (Gray)')
-            ax[1].imshow(blur, cmap='gray'); ax[1].set_title('Preprocesada')
-            ax[2].imshow(otsu, cmap='gray'); ax[2].set_title('Umbral (invertido)')
-            ax[3].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
-            ax[3].set_title(f'Detectadas: {colonies_count}')
-            for a in ax: a.axis('off')
-            plt.tight_layout()
-            plt.show()
+            return colonies_count, original_img, cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
 
-        return colonies_count, original_img, cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
+        except Exception as e:
+            print("❌ Error durante el conteo de colonias:")
+            traceback.print_exc()
+            return 0, original_img, original_img
+
+
+
+
+
+
 
 
 
