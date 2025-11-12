@@ -1030,6 +1030,10 @@ class MultiStandardAnalyzer:
 
         # --- 4) BINARIZACIÓN ROBUSTA (Otsu + apertura) ---
         _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        cv2.imwrite("debug_blur.png", blur)
+        cv2.imwrite("debug_otsu.png", otsu)
+        cv2.imwrite("debug_opening.png", cv2.morphologyEx(otsu, cv2.MORPH_OPEN, np.ones((3,3), np.uint8), iterations=2))
+        print("🧩 Guardadas imágenes de depuración: debug_blur.png / debug_otsu.png / debug_opening.png")
         kernel = np.ones((3, 3), np.uint8)
         opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
         sure_bg = cv2.dilate(opening, kernel, iterations=3)
