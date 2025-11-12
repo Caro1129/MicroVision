@@ -998,12 +998,12 @@ class MultiStandardAnalyzer:
                 'min_inertia': 0.2
             },
             'medium': {
-                'min_threshold': 10,
-                'max_threshold': 230,
-                'min_area': 15,
-                'max_area': 5000,
+                'min_threshold': 5,
+                'max_threshold': 250,
+                'min_area': 10,
+                'max_area': 8000,
                 'min_circularity': 0.05,
-                'min_convexity': 0.1,
+                'min_convexity': 0.05,
                 'min_inertia': 0.05
             },
             'high': {
@@ -1073,7 +1073,7 @@ class MultiStandardAnalyzer:
 
         # --- 3) PRE-PROCESAMIENTO ---
         # Invertir imagen (colonias oscuras -> claras)
-        gray_inverted = cv2.bitwise_not(gray_masked)
+        gray_inverted = cv2.equalizeHist(gray_masked)
         
         # Aplicar CLAHE para mejorar contraste
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -1116,7 +1116,7 @@ class MultiStandardAnalyzer:
         
         # Filtrar por color (buscar blobs claros)
         blob_params.filterByColor = True
-        blob_params.blobColor = 255
+        blob_params.blobColor = 0
         
         # Crear detector
         detector = cv2.SimpleBlobDetector_create(blob_params)
