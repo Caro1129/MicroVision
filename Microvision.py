@@ -1061,8 +1061,12 @@ class MultiStandardAnalyzer:
             cv2.circle(plate_mask, (w//2, h//2), int(min(h, w)*0.45), 255, -1)
             plate_center, plate_radius = (w//2, h//2), int(min(h, w)*0.45)
 
+
         # --- 3) PRE-PROCESAMIENTO ---
-        # Mejorar contraste
+        # Aplicar máscara de la placa al gris original
+        gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+
+        # Mejorar contraste y suavizar
         clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         gray_enhanced = clahe.apply(gray_masked)
         gray_enhanced = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
