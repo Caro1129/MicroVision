@@ -970,49 +970,52 @@ class MultiStandardAnalyzer:
 
 
 
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='high'):
+    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
-        Conteo optimizado que EXCLUYE el fondo amarillo/beige.
+        Conteo optimizado con balance entre sensibilidad y precisión.
         """
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
 
-        # === PARÁMETROS ===
+        # === PARÁMETROS AJUSTADOS ===
         params = {
             'low': {
+                'block_size': 71,
+                'C_value': 5,
+                'threshold_ratio': 0.15,
+                'min_area': 40,
+                'max_area': 3000,
+                'morph_open': 2,
+                'morph_close': 3,
+                'distance_threshold': 0.40,
+                'min_circularity': 0.25
+            },
+            'medium': {
                 'block_size': 51,
                 'C_value': 3,
-                'threshold_ratio': 0.08,
-                'min_area': 15,
+                'threshold_ratio': 0.10,
+                'min_area': 25,
                 'max_area': 2000,
                 'morph_open': 1,
                 'morph_close': 2,
-                'distance_threshold': 0.3
+                'distance_threshold': 0.30,
+                'min_circularity': 0.20
             },
-            'medium': {
+            'high': {
                 'block_size': 41,
                 'C_value': 2,
-                'threshold_ratio': 0.05,
-                'min_area': 10,
+                'threshold_ratio': 0.07,
+                'min_area': 15,
                 'max_area': 1500,
                 'morph_open': 1,
                 'morph_close': 1,
-                'distance_threshold': 0.25
-            },
-            'high': {
-                'block_size': 31,
-                'C_value': 1,
-                'threshold_ratio': 0.03,
-                'min_area': 8,
-                'max_area': 1000,
-                'morph_open': 0,
-                'morph_close': 1,
-                'distance_threshold': 0.20
+                'distance_threshold': 0.25,
+                'min_circularity': 0.15
             }
         }
         
-        p = params.get(sensitivity, params['high'])
+        p = params.get(sensitivity, params['medium'])
         
         print(f"\n{'='*60}")
         print(f"🔬 CONTEO DE COLONIAS - Modo: {sensitivity.upper()}")
@@ -1031,29 +1034,19 @@ class MultiStandardAnalyzer:
         h, w = gray.shape
         print(f"📐 Dimensiones: {w}x{h} px")
 
-        # --- 2) DETECCIÓN ROBUSTA DE LA PLACA PETRI ---
-        # Convertir a HSV para mejor detección de colores
+        # --- 2) DETECCIÓN DE LA PLACA (excluyendo fondo amarillo) ---
         hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
         
-        # Método 1: Detectar el FONDO AMARILLO/BEIGE para excluirlo
-        # Rangos de color amarillo/beige del fondo
-        lower_yellow = np.array([15, 30, 100])   # H, S, V
+        # Detectar fondo amarillo/beige
+        lower_yellow = np.array([15, 30, 100])
         upper_yellow = np.array([40, 255, 255])
-        
-        # Crear máscara del fondo amarillo
         yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-        
-        # Invertir: queremos lo que NO es amarillo
         not_yellow_mask = cv2.bitwise_not(yellow_mask)
         
-        # Método 2: Detectar círculo de la placa
+        # Detectar círculo de la placa
         blurred = cv2.GaussianBlur(gray, (9, 9), 2)
-        
-        # Mejorar contraste para detección
         clahe_detect = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray_contrast = clahe_detect.apply(blurred)
-        
-        # Detectar bordes
         edges = cv2.Canny(gray_contrast, 30, 100)
         
         circles = cv2.HoughCircles(
@@ -1067,7 +1060,6 @@ class MultiStandardAnalyzer:
             maxRadius=int(min(h, w)*0.52)
         )
 
-        # Crear máscara combinada de la placa
         plate_mask = np.zeros_like(gray, dtype=np.uint8)
         circle_detected = False
         
@@ -1076,57 +1068,40 @@ class MultiStandardAnalyzer:
             x, y, r = circles[0, 0]
             safe_radius = int(r * 0.92)
             
-            # Crear máscara circular
             circle_mask = np.zeros_like(gray, dtype=np.uint8)
             cv2.circle(circle_mask, (x, y), safe_radius, 255, -1)
-            
-            # COMBINAR: debe estar dentro del círculo Y no ser amarillo
             plate_mask = cv2.bitwise_and(circle_mask, not_yellow_mask)
-            
             circle_detected = True
             print(f"✅ Petri detectada: centro=({x},{y}), radio={r}px")
         else:
-            # Si no detecta círculo, usar solo la máscara de "no amarillo"
-            # más una erosión para eliminar bordes
             kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
             plate_mask = cv2.erode(not_yellow_mask, kernel_erode, iterations=2)
             print(f"⚠️ Círculo no detectado, usando detección por color")
         
-        # Limpiar la máscara de la placa
+        # Limpiar máscara
         kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
         plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_CLOSE, kernel_close, iterations=2)
         
-        # Rellenar huecos internos
         contours_plate, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if len(contours_plate) > 0:
-            # Tomar el contorno más grande
             largest_contour = max(contours_plate, key=cv2.contourArea)
             plate_mask_filled = np.zeros_like(plate_mask)
             cv2.drawContours(plate_mask_filled, [largest_contour], -1, 255, -1)
             plate_mask = plate_mask_filled
         
-        # Verificar que la máscara no esté vacía
         plate_area = cv2.countNonZero(plate_mask)
-        if plate_area < (h * w * 0.1):  # Menos del 10% de la imagen
-            print("⚠️ Máscara muy pequeña, usando fallback")
-            # Usar región central
-            margin = int(min(h, w) * 0.1)
-            plate_mask = np.zeros_like(gray)
-            plate_mask[margin:h-margin, margin:w-margin] = 255
+        print(f"📊 Área de placa: {plate_area} px ({plate_area/(h*w)*100:.1f}%)")
         
-        print(f"📊 Área de placa: {plate_area} px ({plate_area/(h*w)*100:.1f}% de la imagen)")
-        
-        # Aplicar máscara
         gray_processed = cv2.bitwise_and(gray, gray, mask=plate_mask)
 
-        # --- 3) Pre-procesamiento ---
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        # --- 3) Pre-procesamiento MEJORADO ---
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         gray_enhanced = clahe.apply(gray_processed)
         
-        # Suavizado suave
-        gray_smooth = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
+        # Suavizado más fuerte para reducir sobre-segmentación
+        gray_smooth = cv2.GaussianBlur(gray_enhanced, (5, 5), 0)
 
-        # --- 4) Umbralización MULTI-NIVEL ---
+        # --- 4) Umbralización ---
         thresh1 = cv2.adaptiveThreshold(
             gray_smooth,
             255,
@@ -1138,29 +1113,30 @@ class MultiStandardAnalyzer:
         
         _, thresh2 = cv2.threshold(gray_smooth, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # Combinar
+        # Combinar con OR
         thresh = cv2.bitwise_or(thresh1, thresh2)
-        
-        # CRÍTICO: Aplicar máscara de placa para eliminar fondo
         thresh = cv2.bitwise_and(thresh, plate_mask)
         
         print(f"🎯 Umbralización: block_size={p['block_size']}, C={p['C_value']}")
 
-        # --- 5) Limpieza morfológica MÍNIMA ---
+        # --- 5) Limpieza morfológica MÁS AGRESIVA ---
+        # Eliminar ruido pequeño
         if p['morph_open'] > 0:
-            kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
             thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_open, iterations=p['morph_open'])
         
+        # Cerrar huecos dentro de colonias (CRÍTICO para evitar división)
         if p['morph_close'] > 0:
-            kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
             thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_close, iterations=p['morph_close'])
 
-        # --- 6) Watershed ---
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        sure_bg = cv2.dilate(thresh, kernel_dilate, iterations=2)
+        # --- 6) Watershed con parámetros más conservadores ---
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        sure_bg = cv2.dilate(thresh, kernel_dilate, iterations=3)
         
         dist_transform = cv2.distanceTransform(thresh, cv2.DIST_L2, 5)
         
+        # Umbral MÁS ALTO para evitar sobre-segmentación
         _, sure_fg = cv2.threshold(
             dist_transform,
             p['distance_threshold'] * dist_transform.max(),
@@ -1182,13 +1158,19 @@ class MultiStandardAnalyzer:
         
         markers = cv2.watershed(img_watershed, markers)
         
-        print(f"💧 Watershed: {num_labels} marcadores iniciales")
+        print(f"💧 Watershed: {num_labels} marcadores iniciales, ratio={p['distance_threshold']}")
 
-        # --- 7) FILTRADO CON VERIFICACIÓN ESTRICTA DE PLACA ---
+        # --- 7) FILTRADO CON VERIFICACIÓN DE FORMA ---
         unique_labels = np.unique(markers)
         
         valid_colonies = []
-        rejected = {'too_small': 0, 'too_large': 0, 'out_of_plate': 0, 'in_yellow': 0}
+        rejected = {
+            'too_small': 0, 
+            'too_large': 0, 
+            'out_of_plate': 0, 
+            'in_yellow': 0,
+            'bad_shape': 0
+        }
         
         for label in unique_labels:
             if label <= 1:
@@ -1206,7 +1188,7 @@ class MultiStandardAnalyzer:
                 rejected['too_large'] += 1
                 continue
             
-            # CRÍTICO: Verificar que está dentro de la placa (80% dentro)
+            # Verificar que está dentro de la placa
             overlap_plate = cv2.bitwise_and(colony_mask, plate_mask)
             overlap_ratio = cv2.countNonZero(overlap_plate) / area if area > 0 else 0
             
@@ -1214,13 +1196,27 @@ class MultiStandardAnalyzer:
                 rejected['out_of_plate'] += 1
                 continue
             
-            # EXTRA: Verificar que NO está en zona amarilla
+            # Verificar que NO está en zona amarilla
             overlap_yellow = cv2.bitwise_and(colony_mask, yellow_mask)
             yellow_ratio = cv2.countNonZero(overlap_yellow) / area if area > 0 else 0
             
-            if yellow_ratio > 0.3:  # Si más del 30% está en zona amarilla, rechazar
+            if yellow_ratio > 0.3:
                 rejected['in_yellow'] += 1
                 continue
+            
+            # NUEVO: Verificar forma (circularidad)
+            contours, _ = cv2.findContours(colony_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours) > 0:
+                cnt = max(contours, key=cv2.contourArea)
+                perimeter = cv2.arcLength(cnt, True)
+                
+                if perimeter > 0:
+                    circularity = 4 * np.pi * area / (perimeter * perimeter)
+                    
+                    # Rechazar formas muy irregulares (líneas, fragmentos)
+                    if circularity < p['min_circularity']:
+                        rejected['bad_shape'] += 1
+                        continue
             
             valid_colonies.append(colony_mask)
         
@@ -1229,10 +1225,11 @@ class MultiStandardAnalyzer:
         print(f"\n📊 RESULTADOS:")
         print(f"   ✅ Colonias válidas: {colonies_count}")
         print(f"   ❌ Rechazadas:")
-        print(f"      - Muy pequeñas: {rejected['too_small']}")
-        print(f"      - Muy grandes: {rejected['too_large']}")
+        print(f"      - Muy pequeñas (< {p['min_area']} px): {rejected['too_small']}")
+        print(f"      - Muy grandes (> {p['max_area']} px): {rejected['too_large']}")
         print(f"      - Fuera de placa: {rejected['out_of_plate']}")
         print(f"      - En zona amarilla: {rejected['in_yellow']}")
+        print(f"      - Forma irregular: {rejected['bad_shape']}")
 
         # --- 8) VISUALIZACIÓN ---
         if len(img_display.shape) == 2:
@@ -1268,19 +1265,21 @@ class MultiStandardAnalyzer:
                 
                 cv2.circle(detected_img, (cx, cy), 2, (0, 0, 255), -1)
                 
+                # Números más legibles
+                font_scale = 0.4 if colonies_count > 100 else 0.5
                 cv2.putText(
                     detected_img,
                     str(i + 1),
-                    (cx - 5, cy + 5),
+                    (cx - 6, cy + 6),
                     cv2.FONT_HERSHEY_SIMPLEX,
-                    0.35,
+                    font_scale,
                     (255, 255, 0),
                     1
                 )
         
         detected_img = cv2.addWeighted(detected_img, 0.6, overlay, 0.4, 0)
         
-        # Dibujar borde de la placa en CYAN para verificación
+        # Dibujar borde de placa
         contours_plate_visual, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(detected_img, contours_plate_visual, -1, (0, 255, 255), 2)
         
@@ -1296,29 +1295,36 @@ class MultiStandardAnalyzer:
             fig, axes = plt.subplots(3, 3, figsize=(18, 18))
             
             axes[0, 0].imshow(img_rgb)
-            axes[0, 0].set_title('1. Original RGB')
+            axes[0, 0].set_title('1. Original')
             
-            axes[0, 1].imshow(yellow_mask, cmap='gray')
-            axes[0, 1].set_title('2. Yellow Mask (FONDO)')
+            axes[0, 1].imshow(plate_mask, cmap='gray')
+            axes[0, 1].set_title('2. Plate Mask')
             
-            axes[0, 2].imshow(not_yellow_mask, cmap='gray')
-            axes[0, 2].set_title('3. NOT Yellow')
+            axes[0, 2].imshow(gray_enhanced, cmap='gray')
+            axes[0, 2].set_title('3. Enhanced')
             
-            axes[1, 0].imshow(plate_mask, cmap='gray')
-            axes[1, 0].set_title('4. Plate Mask FINAL')
-            
-            axes[1, 1].imshow(gray_processed, cmap='gray')
-            axes[1, 1].set_title('5. Gray Masked')
-            
-            axes[1, 2].imshow(thresh, cmap='gray')
-            axes[1, 2].set_title('6. Threshold')
+            axes[1, 0].imshow(thresh, cmap='gray')
+            axes[1, 0].set_title('4. Threshold')
             
             dist_norm = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            axes[2, 0].imshow(dist_norm, cmap='jet')
-            axes[2, 0].set_title('7. Distance Transform')
+            axes[1, 1].imshow(dist_norm, cmap='jet')
+            axes[1, 1].set_title('5. Distance Transform')
             
-            axes[2, 1].imshow(sure_fg, cmap='gray')
-            axes[2, 1].set_title('8. Sure Foreground')
+            axes[1, 2].imshow(sure_fg, cmap='gray')
+            axes[1, 2].set_title('6. Sure Foreground')
+            
+            # Mostrar marcadores de watershed
+            markers_display = markers.copy()
+            markers_display[markers == -1] = 0
+            axes[2, 0].imshow(markers_display, cmap='nipy_spectral')
+            axes[2, 0].set_title('7. Watershed Markers')
+            
+            # Mostrar colonias filtradas
+            filtered_mask = np.zeros_like(gray)
+            for cm in valid_colonies:
+                filtered_mask = cv2.bitwise_or(filtered_mask, cm)
+            axes[2, 1].imshow(filtered_mask, cmap='gray')
+            axes[2, 1].set_title('8. Valid Colonies')
             
             axes[2, 2].imshow(detected_img)
             axes[2, 2].set_title(f'9. RESULT: {colonies_count}')
@@ -1333,9 +1339,6 @@ class MultiStandardAnalyzer:
         print(f"{'='*60}\n")
         
         return colonies_count, original_img, detected_img
-
-
-
     
 
 
