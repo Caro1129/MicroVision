@@ -1037,34 +1037,29 @@ class MultiStandardAnalyzer:
         print(f"📐 Dimensiones: {w}x{h} px")
 
         
-        # --- 2) DETECCIÓN DE LA PLACA ---
-        hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+        # --- 2) DETECCIÓN AUTOMÁTICA DE LA PLACA (HoughCircles) ---
+        gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
+        gray_blur = cv2.medianBlur(gray, 7)
 
-        # Detectar el borde azul de la caja de Petri
-        lower_blue = np.array([90, 30, 40])
-        upper_blue = np.array([140, 255, 255])
-        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+        circles = cv2.HoughCircles(
+            gray_blur, 
+            cv2.HOUGH_GRADIENT, dp=1.2, minDist=100,
+            param1=100, param2=30,
+            minRadius=int(min(gray.shape[:2]) * 0.35),
+            maxRadius=int(min(gray.shape[:2]) * 0.48)
+        )
 
-        # Limpiar la máscara del borde
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=2)
-
-        # Invertir para obtener el área de la placa (interior)
-        plate_mask = cv2.bitwise_not(blue_mask)
-
-        # Mantener solo la zona central grande (descarta bordes)
-        contours_plate, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours_plate:
-            largest_contour = max(contours_plate, key=cv2.contourArea)
-            plate_mask = np.zeros_like(gray, dtype=np.uint8)
-            cv2.drawContours(plate_mask, [largest_contour], -1, 255, -1)
-            kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (60, 60))
-            plate_mask = cv2.erode(plate_mask, kernel_erode, iterations=1)
+        plate_mask = np.zeros_like(gray, dtype=np.uint8)
+        if circles is not None:
+            circles = np.uint16(np.around(circles))
+            for (x, y, r) in circles[0, :1]:
+                cv2.circle(plate_mask, (x, y), r, 255, -1)
+                plate_center, plate_radius = (x, y), r
         else:
-            plate_mask = np.ones_like(gray, dtype=np.uint8) * 255
-
-        gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+            # fallback si no detecta círculo
+            h, w = gray.shape
+            cv2.circle(plate_mask, (w//2, h//2), int(min(h, w)*0.45), 255, -1)
+            plate_center, plate_radius = (w//2, h//2), int(min(h, w)*0.45)
 
         # --- 3) PRE-PROCESAMIENTO ---
         # Mejorar contraste
@@ -1072,22 +1067,53 @@ class MultiStandardAnalyzer:
         gray_enhanced = clahe.apply(gray_masked)
         gray_enhanced = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
 
-        # --- 4) DETECCIÓN DE BLOBS ---
-        blob_params = cv2.SimpleBlobDetector_Params()
-        blob_params.filterByColor = True
-        blob_params.blobColor = 255  # buscar colonias claras
-        blob_params.minThreshold = 10
-        blob_params.maxThreshold = 220
-        blob_params.filterByArea = True
-        blob_params.minArea = 40
-        blob_params.maxArea = 2500
-        blob_params.filterByCircularity = True
-        blob_params.minCircularity = 0.1
-        blob_params.filterByConvexity = False
-        blob_params.filterByInertia = False
+        # --- 4) SEGMENTACIÓN DE COLONIAS (Watershed mejorado) ---
+        # Aplicar máscara de la placa al gris original
+        gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
 
-        detector = cv2.SimpleBlobDetector_create(blob_params)
-        keypoints = detector.detect(gray_enhanced)
+        # Mejorar contraste y suavizar
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray_masked)
+        blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
+
+        # Binarización adaptativa
+        _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # Limpieza de ruido
+        kernel = np.ones((3, 3), np.uint8)
+        opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+
+        # Cálculo de regiones seguras (foreground)
+        dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
+        _, sure_fg = cv2.threshold(dist_transform, 0.45 * dist_transform.max(), 255, 0)
+        sure_fg = np.uint8(sure_fg)
+
+        unknown = cv2.subtract(opening, sure_fg)
+
+        # Etiquetado de marcadores
+        _, markers = cv2.connectedComponents(sure_fg)
+        markers = markers + 1
+        markers[unknown == 255] = 0
+
+        # Aplicar Watershed
+        img_ws = cv2.cvtColor(gray_masked, cv2.COLOR_GRAY2BGR)
+        markers = cv2.watershed(img_ws, markers)
+        img_ws[markers == -1] = [255, 0, 0]
+
+        # Extraer contornos (colonias separadas)
+        contours, _ = cv2.findContours(sure_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Crear "keypoints" simulados para mantener compatibilidad
+        keypoints = []
+        for c in contours:
+            area = cv2.contourArea(c)
+            if 50 < area < 5000:  # rango típico de colonias
+                M = cv2.moments(c)
+                if M['m00'] != 0:
+                    cx = int(M['m10'] / M['m00'])
+                    cy = int(M['m01'] / M['m00'])
+                    keypoints.append(cv2.KeyPoint(cx, cy, np.sqrt(area)))
+
 
         # Filtrar blobs fuera de la placa
         valid_colonies = []
