@@ -977,18 +977,18 @@ class MultiStandardAnalyzer:
         import numpy as np
         import streamlit as st
 
-        # --- Parámetros de sensibilidad ---
+        # --- Parámetros base de sensibilidad ---
         params = {
-            'low': {'min_area': 40, 'max_area': 2500, 'blur': 7},
-            'medium': {'min_area': 60, 'max_area': 1800, 'blur': 9},
-            'high': {'min_area': 80, 'max_area': 1200, 'blur': 11}
+            'low': {'blur': 7, 'blockSize': 41, 'C': 4},
+            'medium': {'blur': 9, 'blockSize': 41, 'C': 2},
+            'high': {'blur': 11, 'blockSize': 39, 'C': 1}
         }
         p = params.get(sensitivity, params['medium'])
 
-        # --- Preparar imagen ---
+        # --- Convertir a gris si es necesario ---
         if len(original_img.shape) == 2:
             gray = original_img
-            img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
+            img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2BGR)
         else:
             gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
             img_rgb = original_img.copy()
@@ -1018,22 +1018,33 @@ class MultiStandardAnalyzer:
         # --- 3️⃣ Ecualización y umbral adaptativo ---
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(masked)
-        thresh = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                    cv2.THRESH_BINARY_INV, 41, 2)
+
+        thresh = cv2.adaptiveThreshold(
+            enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV,
+            p['blockSize'], p['C']
+        )
 
         # --- 4️⃣ Operaciones morfológicas ---
         kernel = np.ones((3, 3), np.uint8)
         opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
-        opening = cv2.dilate(opening, kernel, iterations=1)  # mejora bordes de colonias
+        opening = cv2.dilate(opening, kernel, iterations=1)
 
-        # --- 5️⃣ Encontrar contornos de colonias ---
+        # --- 5️⃣ Ajuste dinámico de áreas válidas según tamaño de placa ---
+        if radius:
+            total_area = np.pi * (radius ** 2)
+            min_area = max(0.0002 * total_area, 30)
+            max_area = max(0.015 * total_area, 1200)
+        else:
+            min_area, max_area = 60, 1800
+
+        # --- 6️⃣ Contornos de colonias ---
         contours, _ = cv2.findContours(opening, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         valid = []
 
         if center and radius:
             for c in contours:
                 area = cv2.contourArea(c)
-                if p['min_area'] < area < p['max_area']:
+                if min_area < area < max_area:
                     M = cv2.moments(c)
                     if M["m00"] == 0:
                         continue
@@ -1047,17 +1058,18 @@ class MultiStandardAnalyzer:
 
         colonies_count = len(valid)
 
-        # --- 6️⃣ Dibujar resultados ---
+        # --- 7️⃣ Dibujar resultados ---
         detected_img = img_rgb.copy()
         if contours:
             cv2.drawContours(detected_img, valid, -1, (0, 255, 0), 2)
-            cv2.circle(detected_img, center, int(radius * 0.93), (255, 255, 0), 2)
+            if center:
+                cv2.circle(detected_img, center, int(radius * 0.93), (255, 255, 0), 2)
 
-        cv2.rectangle(detected_img, (5, 5), (280, 45), (0, 0, 0), -1)
+        cv2.rectangle(detected_img, (5, 5), (300, 45), (0, 0, 0), -1)
         cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # --- 7️⃣ Modo depuración ---
+        # --- 8️⃣ Debug ---
         if debug:
             st.image(gray, caption="Imagen gris", use_container_width=True)
             st.image(plate_mask, caption="Máscara de placa", use_container_width=True)
