@@ -1053,21 +1053,20 @@ class MultiStandardAnalyzer:
             markers = cv2.watershed(img_ws, markers)
             img_ws[markers == -1] = [255, 0, 0]
 
-            # --- 6) Contornos finales ---
+            # --- 6) Contornos finales (versión debug) ---
             contours, _ = cv2.findContours(sure_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            print(f"🔹 Total contornos detectados antes del filtro: {len(contours)}")
+
             valid_contours = []
             for c in contours:
                 area = cv2.contourArea(c)
-                if 30 < area < 6000:
-                    M = cv2.moments(c)
-                    if M["m00"] != 0:
-                        cx = int(M["m10"] / M["m00"])
-                        cy = int(M["m01"] / M["m00"])
-                        if plate_mask[cy, cx] == 255:
-                            valid_contours.append(c)
+                if 30 < area < 6000:  # Rango de área ajustable
+                    valid_contours.append(c)
+            print(f"🔹 Contornos que pasan filtro de área: {len(valid_contours)}")
 
             colonies_count = len(valid_contours)
-            print(f"✅ Colonias detectadas: {colonies_count}")
+            print(f"✅ Colonias detectadas finales: {colonies_count}")
+
 
             # --- 7) Visualización ---
             detected_img = img_rgb.copy()
