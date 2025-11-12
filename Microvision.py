@@ -973,253 +973,96 @@ class MultiStandardAnalyzer:
     
 
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
-        """
-        Conteo de colonias con enfoque SIMPLIFICADO y ROBUSTO.
-        Usa detección directa por blob en lugar de watershed complejo.
-        """
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
+        import streamlit as st
 
-        # === PARÁMETROS SIMPLIFICADOS ===
         params = {
-            'low': {
-                'min_threshold': 40,
-                'max_threshold': 180,
-                'min_area': 50,
-                'max_area': 2500,
-                'min_circularity': 0.3,
-                'min_convexity': 0.4,
-                'min_inertia': 0.2
-            },
-            'medium': {
-                'min_threshold': 5,
-                'max_threshold': 250,
-                'min_area': 10,
-                'max_area': 8000,
-                'min_circularity': 0.05,
-                'min_convexity': 0.05,
-                'min_inertia': 0.05
-            },
-            'high': {
-                'min_threshold': 20,
-                'max_threshold': 220,
-                'min_area': 10,
-                'max_area': 1000,
-                'min_circularity': 0.15,
-                'min_convexity': 0.25,
-                'min_inertia': 0.1
-            }
+            'low': {'min_threshold': 40, 'max_threshold': 180, 'min_area': 50, 'max_area': 2500},
+            'medium': {'min_threshold': 5, 'max_threshold': 250, 'min_area': 10, 'max_area': 8000},
+            'high': {'min_threshold': 20, 'max_threshold': 220, 'min_area': 10, 'max_area': 1000}
         }
         p = params.get(sensitivity, params['medium'])
 
-        print(f"\n{'='*60}")
-        print(f"🔬 CONTEO DE COLONIAS - Modo: {sensitivity.upper()} (Blob Detection)")
-        print(f"{'='*60}")
-
-        # --- 1) Preparar imagen ---
         if len(original_img.shape) == 2:
             gray = original_img
-            img_display = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
-            img_rgb = img_display.copy()
+            img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
         else:
-            # asumo imagen en RGB (Streamlit suele entregar RGB)
             gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-            img_display = original_img.copy()
             img_rgb = original_img.copy()
 
-        h, w = gray.shape
-        print(f"📐 Dimensiones: {w}x{h} px")
+        # === 1) Detección robusta de la placa ===
+        blur = cv2.GaussianBlur(gray, (11, 11), 0)
+        edges = cv2.Canny(blur, 30, 100)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # --- 2) DETECCIÓN DE LA PLACA ---
-        hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
-
-        # Detectar el borde azul de la caja de Petri
-        lower_blue = np.array([90, 30, 40])
-        upper_blue = np.array([140, 255, 255])
-        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
-
-        # Limpiar la máscara del borde
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=2)
-
-        # Invertir para obtener el área de la placa (interior)
-        plate_mask = cv2.bitwise_not(blue_mask)
-
-        # Mantener solo la zona central grande (descarta bordes)
-        contours_plate, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours_plate:
-            largest_contour = max(contours_plate, key=cv2.contourArea)
-            plate_mask = np.zeros_like(gray, dtype=np.uint8)
-            cv2.drawContours(plate_mask, [largest_contour], -1, 255, -1)
-            kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (60, 60))
-            plate_mask = cv2.erode(plate_mask, kernel_erode, iterations=1)
+        plate_mask = np.zeros_like(gray, dtype=np.uint8)
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            (x, y), radius = cv2.minEnclosingCircle(largest)
+            if radius > 50:  # evitar falsos círculos pequeños
+                cv2.circle(plate_mask, (int(x), int(y)), int(radius * 0.95), 255, -1)
+            else:
+                plate_mask[:] = 255
         else:
-            plate_mask = np.ones_like(gray, dtype=np.uint8) * 255
+            plate_mask[:] = 255
 
         gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
 
-        # --- 3) PRE-PROCESAMIENTO ---
-        # Mejorar contraste
+        # === 2) Mejora de contraste ===
         clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         gray_enhanced = clahe.apply(gray_masked)
         gray_enhanced = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
 
-        # --- 4) DETECCIÓN DE BLOBS ---
-        blob_params = cv2.SimpleBlobDetector_Params()
-        blob_params.filterByColor = True
-        blob_params.blobColor = 255  # buscar colonias claras
-        blob_params.minThreshold = p['min_threshold']
-        blob_params.maxThreshold = p['max_threshold']
-        blob_params.thresholdStep = 10
+        # === 3) Detección de colonias (blobs claros) ===
+        params = cv2.SimpleBlobDetector_Params()
+        params.filterByColor = True
+        params.blobColor = 255
+        params.minThreshold = p['min_threshold']
+        params.maxThreshold = p['max_threshold']
+        params.filterByArea = True
+        params.minArea = p['min_area']
+        params.maxArea = p['max_area']
+        params.filterByCircularity = False
+        params.filterByConvexity = False
+        params.filterByInertia = False
 
-        # Filtrar por área
-        blob_params.filterByArea = True
-        blob_params.minArea = p['min_area']
-        blob_params.maxArea = p['max_area']
-
-        # Filtrar por circularidad (opcional)
-        blob_params.filterByCircularity = True
-        blob_params.minCircularity = p['min_circularity']
-
-        # Desactivar convexity/inertia para hacerlo más permisivo
-        blob_params.filterByConvexity = False
-        blob_params.filterByInertia = False
-
-        # Crear detector (compatibilidad OpenCV)
-        try:
-            detector = cv2.SimpleBlobDetector_create(blob_params)
-        except AttributeError:
-            detector = cv2.SimpleBlobDetector(blob_params)
-
+        detector = cv2.SimpleBlobDetector_create(params)
         keypoints = detector.detect(gray_enhanced)
 
-        # Filtrar blobs fuera de la placa
-        valid_colonies = []
+        # === 4) Filtrar solo dentro de la placa circular ===
+        valid = []
         for kp in keypoints:
             x, y = int(kp.pt[0]), int(kp.pt[1])
-            # proteger acceso por si el kp está en el borde
             if 0 <= y < plate_mask.shape[0] and 0 <= x < plate_mask.shape[1]:
                 if plate_mask[y, x] == 255:
-                    valid_colonies.append(kp)
+                    valid.append(kp)
+        colonies_count = len(valid)
 
-        colonies_count = len(valid_colonies)
-
-        # --- 5) FILTRADO ADICIONAL ---
-        # (aquí re-aplicamos un filtro de solapamiento si lo deseas)
-        final_colonies = []
-        rejected = {'out_of_plate': 0, 'overlapping': 0}
-        centers = []
-
-        for kp in valid_colonies:
+        # === 5) Visualización final ===
+        detected_img = img_rgb.copy()
+        for i, kp in enumerate(valid):
             x, y = int(kp.pt[0]), int(kp.pt[1])
-            radius = int(kp.size / 2)
+            r = int(kp.size / 2)
+            cv2.circle(detected_img, (x, y), r, (0, 255, 0), 2)
+            cv2.putText(detected_img, str(i + 1), (x - 8, y + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
 
-            if plate_mask[y, x] == 0:
-                rejected['out_of_plate'] += 1
-                continue
+        # Dibujar círculo de la placa
+        contours_plate, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(detected_img, contours_plate, -1, (255, 255, 0), 2)
 
-            overlapping = False
-            for cx, cy, cr in centers:
-                dist = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
-                if dist < (radius + cr) * 0.5:
-                    overlapping = True
-                    break
+        # Contador
+        cv2.rectangle(detected_img, (5, 5), (260, 45), (0, 0, 0), -1)
+        cv2.putText(detected_img, f"COLONIAS: {colonies_count}",
+                    (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-            if overlapping:
-                rejected['overlapping'] += 1
-                continue
-
-            final_colonies.append(kp)
-            centers.append((x, y, radius))
-
-        colonies_count = len(final_colonies)
-
-        print(f"\n📊 RESULTADOS:")
-        print(f"   ✅ Colonias válidas: {colonies_count}")
-        print(f"   ❌ Rechazadas:")
-        print(f"      - Fuera de placa: {rejected['out_of_plate']}")
-        print(f"      - Solapamiento: {rejected['overlapping']}")
-
-        # --- 6) VISUALIZACIÓN ---
-        if len(img_display.shape) == 2:
-            detected_img = cv2.cvtColor(img_display, cv2.COLOR_GRAY2RGB)
-        else:
-            detected_img = img_display.copy()
-
-        # Dibujar colonias
-        for i, kp in enumerate(final_colonies):
-            x, y = int(kp.pt[0]), int(kp.pt[1])
-            radius = int(kp.size / 2)
-
-            # Rellenar la colonia con color verde semitransparente
-            overlay = detected_img.copy()
-            cv2.circle(overlay, (x, y), radius, (0, 255, 0), -1)
-            alpha = 0.3
-            cv2.addWeighted(overlay, alpha, detected_img, 1 - alpha, 0, detected_img)
-
-            # Marcar el borde y el centro
-            cv2.circle(detected_img, (x, y), radius, (255, 0, 0), 2)
-            cv2.circle(detected_img, (x, y), 2, (0, 0, 255), -1)
-
-            # Número
-            font_scale = 0.4 if colonies_count > 100 else 0.5
-            cv2.putText(
-                detected_img,
-                str(i + 1),
-                (x - 8, y + 5),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                font_scale,
-                (255, 255, 0),
-                1
-            )
-
-        # Dibujar borde de placa
-        contours_visual, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(detected_img, contours_visual, -1, (0, 255, 255), 2)
-
-        # Contador en la imagen
-        text = f"COLONIAS: {colonies_count}"
-        text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
-
-        cv2.rectangle(detected_img, (5, 5), (text_size[0] + 25, text_size[1] + 25), (0, 0, 0), -1)
-        cv2.putText(detected_img, text, (15, text_size[1] + 15), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-
-        # --- 7) Debug ---
         if debug:
-            fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+            st.image(gray, caption="Grayscale", use_container_width=True)
+            st.image(plate_mask, caption="Plate Mask", use_container_width=True)
+            st.image(gray_enhanced, caption="Enhanced Image", use_container_width=True)
 
-            axes[0, 0].imshow(img_rgb)
-            axes[0, 0].set_title('1. Original')
-
-            axes[0, 1].imshow(plate_mask, cmap='gray')
-            axes[0, 1].set_title('2. Plate Mask')
-
-            axes[0, 2].imshow(gray_masked, cmap='gray')
-            axes[0, 2].set_title('3. Masked Gray')
-
-            axes[1, 0].imshow(gray_enhanced, cmap='gray')
-            axes[1, 0].set_title('4. Enhanced (CLAHE)')
-
-            img_with_keypoints = cv2.drawKeypoints(
-                gray_enhanced, valid_colonies, np.array([]), (0, 255, 0),
-                cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
-            )
-            axes[1, 1].imshow(img_with_keypoints)
-            axes[1, 1].set_title(f'5. Colonies ({colonies_count})')
-
-            axes[1, 2].imshow(detected_img)
-            axes[1, 2].set_title('6. Final Detection')
-
-            for ax in axes.flat:
-                ax.axis('off')
-
-            plt.tight_layout()
-            st.pyplot(fig)
-            plt.close(fig)
-
-        print(f"{'='*60}\n")
         return colonies_count, original_img, detected_img
 
 
