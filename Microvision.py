@@ -1051,7 +1051,24 @@ class MultiStandardAnalyzer:
         unknown = cv2.subtract(sure_bg, sure_fg)
         cv2.imwrite("debug9_unknown.png", unknown)
 
-
+        if debug:
+        st.subheader("🔎 Imágenes de diagnóstico")
+        for name in [
+            "debug1_gray_masked.png",
+            "debug2_enhanced.png",
+            "debug3_blur.png",
+            "debug4_otsu.png",
+            "debug5_opening.png",
+            "debug6_sure_bg.png",
+            "debug7_distance.png",
+            "debug8_sure_fg.png",
+            "debug9_unknown.png"
+        ]:
+            try:
+                st.image(Image.open(name), caption=name, use_container_width=True)
+            except:
+                st.write(f"No se pudo cargar {name}")
+                
         # --- 5) Watershed ---
         _, markers = cv2.connectedComponents(sure_fg)
         markers = markers + 1
