@@ -1035,7 +1035,7 @@ class MultiStandardAnalyzer:
 
         # --- 5️⃣ Distance Transform + separación de colonias ---
         dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist, 0.35 * dist.max(), 255, 0)
+        _, sure_fg = cv2.threshold(dist, 0.5 * dist.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
         unknown = cv2.subtract(binary, sure_fg)
         _, markers = cv2.connectedComponents(sure_fg)
@@ -1055,6 +1055,10 @@ class MultiStandardAnalyzer:
                 continue
             mask = np.uint8(markers == label) * 255
             area = cv2.countNonZero(mask)
+            mean_intensity = cv2.mean(enhanced, mask=mask)[0]
+            if mean_intensity > 200:  # demasiado claro, probablemente un reflejo
+                continue
+
             if area < p['min_area'] or area > p['max_area']:
                 continue
 
@@ -1065,7 +1069,7 @@ class MultiStandardAnalyzer:
             cnt = contours[0]
             (x, y), r = cv2.minEnclosingCircle(cnt)
             circularity = 4 * np.pi * cv2.contourArea(cnt) / (cv2.arcLength(cnt, True) ** 2 + 1e-5)
-            if circularity < 0.35:
+            if circularity < 0.55:
                 continue
 
             valid_centroids.append((int(x), int(y)))
