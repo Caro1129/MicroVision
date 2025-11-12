@@ -1188,41 +1188,36 @@ class MultiStandardAnalyzer:
 
         # --- 7) Debug ---
         if debug:
-            # generar imágenes útiles para depurar
+            fig, axes = plt.subplots(2, 3, figsize=(12, 8))
+
+            axes[0, 0].imshow(img_rgb)
+            axes[0, 0].set_title('1. Original')
+
+            axes[0, 1].imshow(plate_mask, cmap='gray')
+            axes[0, 1].set_title('2. Plate Mask')
+
+            axes[0, 2].imshow(gray_masked, cmap='gray')
+            axes[0, 2].set_title('3. Masked Gray')
+
+            axes[1, 0].imshow(gray_enhanced, cmap='gray')
+            axes[1, 0].set_title('4. Enhanced (CLAHE)')
+
             img_with_keypoints = cv2.drawKeypoints(
-                gray_enhanced,
-                keypoints,
-                np.array([]),
-                (0, 0, 255),
+                gray_enhanced, valid_colonies, np.array([]), (0, 255, 0),
                 cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
             )
+            axes[1, 1].imshow(img_with_keypoints)
+            axes[1, 1].set_title(f'5. Colonies ({colonies_count})')
 
-            # crear imagen solo con colonias válidas
-            img_valid = img_rgb.copy()
-            for kp in final_colonies:
-                x, y = int(kp.pt[0]), int(kp.pt[1])
-                radius = int(kp.size / 2)
-                cv2.circle(img_valid, (x, y), radius, (0, 255, 0), 2)
-
-            fig, axes = plt.subplots(3, 3, figsize=(18, 18))
-            axes[0, 0].imshow(img_rgb); axes[0, 0].set_title('1. Original')
-            axes[0, 1].imshow(plate_mask, cmap='gray'); axes[0, 1].set_title('2. Plate Mask')
-            axes[0, 2].imshow(gray_masked, cmap='gray'); axes[0, 2].set_title('3. Masked Gray')
-
-            # invertir para inspección (si te interesa)
-            gray_inverted = cv2.bitwise_not(gray_masked)
-            axes[1, 0].imshow(gray_inverted, cmap='gray'); axes[1, 0].set_title('4. Inverted')
-            axes[1, 1].imshow(gray_enhanced, cmap='gray'); axes[1, 1].set_title('5. Enhanced (CLAHE)')
-            axes[1, 2].imshow(img_with_keypoints); axes[1, 2].set_title(f'6. All Blobs ({len(keypoints)})')
-
-            axes[2, 0].imshow(img_valid); axes[2, 0].set_title(f'7. Valid Colonies ({colonies_count})')
-            axes[2, 1].imshow(detected_img); axes[2, 1].set_title(f'8. FINAL: {colonies_count}')
-            axes[2, 2].axis('off')
+            axes[1, 2].imshow(detected_img)
+            axes[1, 2].set_title('6. Final Detection')
 
             for ax in axes.flat:
                 ax.axis('off')
+
             plt.tight_layout()
-            plt.show()
+            st.pyplot(fig)
+            plt.close(fig)
 
         print(f"{'='*60}\n")
         return colonies_count, original_img, detected_img
