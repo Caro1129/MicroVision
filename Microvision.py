@@ -1074,22 +1074,21 @@ class MultiStandardAnalyzer:
         if center:
             cv2.circle(detected_img, center, int(radius * 0.93), (255, 255, 0), 2)
 
-        for i, kp in enumerate(valid_colonies):
-            x, y = int(kp.pt[0]), int(kp.pt[1])
-            r = int(kp.size / 2)
-            cv2.circle(detected_img, (x, y), r, (0, 255, 0), 2)
-            cv2.putText(detected_img, str(i + 1), (x - 8, y + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        # Dibujar colonias detectadas (válido para máscaras)
+        for i, mask in enumerate(valid_colonies):
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for c in contours:
+                area = cv2.contourArea(c)
+                if p['min_area'] < area < p['max_area']:
+                    (x, y), r = cv2.minEnclosingCircle(c)
+                    cv2.circle(detected_img, (int(x), int(y)), int(r), (0, 255, 0), 2)
+                    cv2.putText(detected_img, str(i + 1), (int(x) - 8, int(y) + 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
-        cv2.rectangle(detected_img, (5, 5), (300, 45), (0, 0, 0), -1)
+        cv2.rectangle(detected_img, (5, 5), (320, 45), (0, 0, 0), -1)
         cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        print(f"\n{'='*60}")
-        print(f"🔬 Colonias detectadas: {colonies_count}")
-        print(f"❌ Fuera de placa: {rejected['out_of_plate']}")
-        print(f"❌ Solapadas: {rejected['overlapping']}")
-        print(f"{'='*60}\n")
 
         # --- 8️⃣ Modo debug (opcional) ---
         if debug:
