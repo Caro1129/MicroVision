@@ -972,92 +972,66 @@ class MultiStandardAnalyzer:
 
     
 
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
+    def count_colonies_opencv(self, original_img, debug=False):
         import cv2
         import numpy as np
 
-        print("\n🔬 Conteo de colonias - Detección simplificada por blobs")
+        try:
+            # --- 1) Redimensionar si es muy grande ---
+            max_dim = 1200
+            h, w = original_img.shape[:2]
+            if max(h, w) > max_dim:
+                scale = max_dim / max(h, w)
+                original_img = cv2.resize(original_img, (int(w * scale), int(h * scale)))
 
-        # --- 1) Preparar imagen ---
-        if len(original_img.shape) == 2:
-            gray = original_img
-            img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
-        else:
-            gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-            img_rgb = original_img.copy()
+            # --- 2) Convertir a gris ---
+            if len(original_img.shape) == 3:
+                gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
+            else:
+                gray = original_img.copy()
 
-        # --- 2) Detectar borde de la placa ---
-        hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
-        lower_blue = np.array([90, 30, 40])
-        upper_blue = np.array([140, 255, 255])
-        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+            # --- 3) Mejorar contraste y suavizar ---
+            gray = cv2.equalizeHist(gray)
+            blur = cv2.GaussianBlur(gray, (3, 3), 0)
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
-        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=2)
-        plate_mask = cv2.bitwise_not(blue_mask)
+            # --- 4) Invertir si fondo oscuro ---
+            if np.mean(blur) < 127:
+                blur = cv2.bitwise_not(blur)
 
-        contours_plate, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours_plate:
-            largest_contour = max(contours_plate, key=cv2.contourArea)
-            plate_mask = np.zeros_like(gray, dtype=np.uint8)
-            cv2.drawContours(plate_mask, [largest_contour], -1, 255, -1)
-            kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (60, 60))
-            plate_mask = cv2.erode(plate_mask, kernel_erode, iterations=1)
-        else:
-            plate_mask = np.ones_like(gray, dtype=np.uint8) * 255
+            # --- 5) Binarización y limpieza ---
+            _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, np.ones((3,3), np.uint8), iterations=2)
 
-        # --- 3) Preprocesamiento ---
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        gray_enhanced = clahe.apply(gray)
-        blur = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
+            # --- 6) Detectar blobs (colonias) ---
+            params = cv2.SimpleBlobDetector_Params()
+            params.filterByColor = True
+            params.blobColor = 255
+            params.filterByArea = True
+            params.minArea = 30
+            params.maxArea = 5000
+            detector = cv2.SimpleBlobDetector_create(params)
+            keypoints = detector.detect(opening)
 
-        # Invertir si el fondo es oscuro
-        mean_intensity = np.mean(blur[plate_mask == 255])
-        if mean_intensity < 127:
-            blur = cv2.bitwise_not(blur)
+            colonies_count = len(keypoints)
 
-        # --- 4) Detección de blobs ---
-        blob_params = cv2.SimpleBlobDetector_Params()
-        blob_params.filterByColor = True
-        blob_params.blobColor = 255
-        blob_params.minThreshold = 10
-        blob_params.maxThreshold = 250
-        blob_params.filterByArea = True
-        blob_params.minArea = 20
-        blob_params.maxArea = 6000
-        blob_params.filterByCircularity = False
-        blob_params.filterByConvexity = False
-        blob_params.filterByInertia = False
+            # --- 7) Dibujar resultado final ---
+            detected_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
+            for i, kp in enumerate(keypoints):
+                x, y = int(kp.pt[0]), int(kp.pt[1])
+                r = int(kp.size / 2)
+                cv2.circle(detected_img, (x, y), r, (0, 255, 0), 2)
 
-        detector = cv2.SimpleBlobDetector_create(blob_params)
-        keypoints = detector.detect(blur)
+            text = f"Colonias: {colonies_count}"
+            cv2.rectangle(detected_img, (5, 5), (230, 40), (0, 0, 0), -1)
+            cv2.putText(detected_img, text, (15, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # --- 5) Filtrar blobs fuera de la placa ---
-        valid_colonies = []
-        for kp in keypoints:
-            x, y = int(kp.pt[0]), int(kp.pt[1])
-            if plate_mask[y, x] == 255:
-                valid_colonies.append(kp)
+            return colonies_count, original_img, detected_img
 
-        colonies_count = len(valid_colonies)
-        print(f"✅ Colonias detectadas: {colonies_count}")
+        except Exception as e:
+            print(f"❌ Error en count_colonies_opencv: {e}")
+            return 0, original_img, original_img
 
-        # --- 6) Visualización final ---
-        detected_img = img_rgb.copy()
-        for i, kp in enumerate(valid_colonies):
-            x, y = int(kp.pt[0]), int(kp.pt[1])
-            radius = int(kp.size / 2)
-            cv2.circle(detected_img, (x, y), radius, (0, 255, 0), 2)
-            cv2.putText(detected_img, str(i+1), (x-10, y-10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255,255,0), 1)
-
-        text = f"Colonias: {colonies_count}"
-        cv2.rectangle(detected_img, (5,5), (230,40), (0,0,0), -1)
-        cv2.putText(detected_img, text, (15,30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,0), 2)
-
-        return colonies_count, original_img, detected_img
 
 
 
