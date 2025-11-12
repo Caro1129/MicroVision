@@ -1022,14 +1022,11 @@ class MultiStandardAnalyzer:
         enhanced = clahe.apply(gray_masked)
         blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
 
-        # 🔁 Invertir si el fondo es claro
-        mean_intensity = np.mean(blur)
-        if mean_intensity > 127:
-            print("🟡 Fondo claro detectado → Invirtiendo imagen")
-            blur = cv2.bitwise_not(blur)
+        # 🟢 Fondo oscuro → no invertimos
+        print("🟢 Fondo oscuro detectado → NO se invierte la imagen")
 
         # --- 4) BINARIZACIÓN AJUSTADA (colonias claras sobre fondo oscuro) ---
-        # No invertimos, usamos directamente Otsu
+        # Detecta colonias claras directamente
         _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
         # Limpieza del ruido (elimina puntos pequeños)
@@ -1041,7 +1038,7 @@ class MultiStandardAnalyzer:
 
         # Cálculo de regiones centrales (foreground)
         dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist_transform, 0.35 * dist_transform.max(), 255, 0)
+        _, sure_fg = cv2.threshold(dist_transform, 0.25 * dist_transform.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
         unknown = cv2.subtract(sure_bg, sure_fg)
 
@@ -1053,6 +1050,7 @@ class MultiStandardAnalyzer:
         img_ws = cv2.cvtColor(blur, cv2.COLOR_GRAY2BGR)
         markers = cv2.watershed(img_ws, markers)
         img_ws[markers == -1] = [255, 0, 0]
+
 
         # --- 6) Contornos finales ---
         contours, _ = cv2.findContours(sure_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
