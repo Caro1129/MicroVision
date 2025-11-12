@@ -1103,58 +1103,45 @@ class MultiStandardAnalyzer:
         valid_colonies = []
         rejected = {
             'out_of_plate': 0,
-            'in_yellow': 0,
             'overlapping': 0
         }
-        
+
         # Crear lista de centros para verificar solapamiento
         centers = []
-        
+
         for kp in keypoints:
             x, y = int(kp.pt[0]), int(kp.pt[1])
             radius = int(kp.size / 2)
-            
+
             # Verificar que está dentro de la placa
             if plate_mask[y, x] == 0:
                 rejected['out_of_plate'] += 1
                 continue
-            
-            # Verificar que NO está en zona amarilla
-            roi_size = max(radius, 5)
-            y1, y2 = max(0, y-roi_size), min(h, y+roi_size)
-            x1, x2 = max(0, x-roi_size), min(w, x+roi_size)
-            
-            yellow_roi = yellow_mask[y1:y2, x1:x2]
-            if yellow_roi.size > 0:
-                yellow_ratio = np.sum(yellow_roi > 0) / yellow_roi.size
-                if yellow_ratio > 0.3:
-                    rejected['in_yellow'] += 1
-                    continue
-            
+
             # Verificar solapamiento con colonias ya detectadas
             overlapping = False
             for cx, cy, cr in centers:
                 dist = np.sqrt((x - cx)**2 + (y - cy)**2)
-                if dist < (radius + cr) * 0.5:  # Si están muy cerca
+                if dist < (radius + cr) * 0.5:  # muy cerca = solapamiento
                     overlapping = True
                     break
-            
+
             if overlapping:
                 rejected['overlapping'] += 1
                 continue
-            
+
             # Agregar a válidos
             valid_colonies.append(kp)
             centers.append((x, y, radius))
-        
+
         colonies_count = len(valid_colonies)
-        
+
         print(f"\n📊 RESULTADOS:")
         print(f"   ✅ Colonias válidas: {colonies_count}")
         print(f"   ❌ Rechazadas:")
         print(f"      - Fuera de placa: {rejected['out_of_plate']}")
-        print(f"      - En zona amarilla: {rejected['in_yellow']}")
         print(f"      - Solapamiento: {rejected['overlapping']}")
+
 
         # --- 6) VISUALIZACIÓN ---
         if len(img_display.shape) == 2:
