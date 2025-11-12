@@ -973,12 +973,13 @@ class MultiStandardAnalyzer:
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
         Conteo optimizado con balance entre sensibilidad y precisión.
+        VERSIÓN MEJORADA - Evita sobre-agrupamiento de colonias
         """
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
 
-        # === PARÁMETROS AJUSTADOS ===
+        # === PARÁMETROS OPTIMIZADOS ===
         params = {
             'low': {
                 'block_size': 71,
@@ -992,26 +993,26 @@ class MultiStandardAnalyzer:
                 'min_circularity': 0.25
             },
             'medium': {
-                'block_size': 51,
-                'C_value': 3,
+                'block_size': 41,          # REDUCIDO para detectar mejor
+                'C_value': 2,              # REDUCIDO
                 'threshold_ratio': 0.10,
-                'min_area': 25,
-                'max_area': 2000,
-                'morph_open': 1,
-                'morph_close': 2,
-                'distance_threshold': 0.30,
-                'min_circularity': 0.20
+                'min_area': 20,            # REDUCIDO para colonias pequeñas
+                'max_area': 800,           # MUY REDUCIDO - evita fusión
+                'morph_open': 2,           # AUMENTADO para limpiar ruido
+                'morph_close': 1,          # REDUCIDO - crítico para evitar fusión
+                'distance_threshold': 0.18, # MUY REDUCIDO - separa colonias cercanas
+                'min_circularity': 0.15
             },
             'high': {
-                'block_size': 41,
-                'C_value': 2,
+                'block_size': 31,          # REDUCIDO
+                'C_value': 1,              # REDUCIDO
                 'threshold_ratio': 0.07,
-                'min_area': 15,
-                'max_area': 1500,
+                'min_area': 10,            # REDUCIDO
+                'max_area': 600,           # MUY REDUCIDO
                 'morph_open': 1,
                 'morph_close': 1,
-                'distance_threshold': 0.25,
-                'min_circularity': 0.15
+                'distance_threshold': 0.12, # MUY REDUCIDO
+                'min_circularity': 0.12
             }
         }
         
@@ -1098,8 +1099,8 @@ class MultiStandardAnalyzer:
         clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         gray_enhanced = clahe.apply(gray_processed)
         
-        # Suavizado más fuerte para reducir sobre-segmentación
-        gray_smooth = cv2.GaussianBlur(gray_enhanced, (5, 5), 0)
+        # CAMBIO: Suavizado más leve para preservar bordes
+        gray_smooth = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
 
         # --- 4) Umbralización ---
         thresh1 = cv2.adaptiveThreshold(
@@ -1119,24 +1120,32 @@ class MultiStandardAnalyzer:
         
         print(f"🎯 Umbralización: block_size={p['block_size']}, C={p['C_value']}")
 
-        # --- 5) Limpieza morfológica MÁS AGRESIVA ---
+        # --- 5) Limpieza morfológica OPTIMIZADA ---
         # Eliminar ruido pequeño
         if p['morph_open'] > 0:
             kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
             thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel_open, iterations=p['morph_open'])
         
-        # Cerrar huecos dentro de colonias (CRÍTICO para evitar división)
+        # NUEVO: Separar colonias fusionadas usando gradiente morfológico
+        kernel_gradient = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        gradient = cv2.morphologyEx(thresh, cv2.MORPH_GRADIENT, kernel_gradient)
+        thresh_separated = cv2.subtract(thresh, gradient)
+        
+        # Cerrar huecos DENTRO de colonias (con menos iteraciones)
         if p['morph_close'] > 0:
-            kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_close, iterations=p['morph_close'])
+            kernel_close_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            thresh_separated = cv2.morphologyEx(thresh_separated, cv2.MORPH_CLOSE, kernel_close_small, iterations=p['morph_close'])
+        
+        thresh = thresh_separated
 
-        # --- 6) Watershed con parámetros más conservadores ---
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        sure_bg = cv2.dilate(thresh, kernel_dilate, iterations=3)
+        # --- 6) Watershed con parámetros CONSERVADORES ---
+        # CAMBIO: Kernel y dilación más suaves
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        sure_bg = cv2.dilate(thresh, kernel_dilate, iterations=2)
         
         dist_transform = cv2.distanceTransform(thresh, cv2.DIST_L2, 5)
         
-        # Umbral MÁS ALTO para evitar sobre-segmentación
+        # Umbral ALTO para evitar sobre-segmentación
         _, sure_fg = cv2.threshold(
             dist_transform,
             p['distance_threshold'] * dist_transform.max(),
@@ -1204,7 +1213,7 @@ class MultiStandardAnalyzer:
                 rejected['in_yellow'] += 1
                 continue
             
-            # NUEVO: Verificar forma (circularidad)
+            # Verificar forma (circularidad)
             contours, _ = cv2.findContours(colony_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if len(contours) > 0:
                 cnt = max(contours, key=cv2.contourArea)
@@ -1213,7 +1222,7 @@ class MultiStandardAnalyzer:
                 if perimeter > 0:
                     circularity = 4 * np.pi * area / (perimeter * perimeter)
                     
-                    # Rechazar formas muy irregulares (líneas, fragmentos)
+                    # Rechazar formas muy irregulares
                     if circularity < p['min_circularity']:
                         rejected['bad_shape'] += 1
                         continue
@@ -1304,7 +1313,7 @@ class MultiStandardAnalyzer:
             axes[0, 2].set_title('3. Enhanced')
             
             axes[1, 0].imshow(thresh, cmap='gray')
-            axes[1, 0].set_title('4. Threshold')
+            axes[1, 0].set_title('4. Threshold + Separated')
             
             dist_norm = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
             axes[1, 1].imshow(dist_norm, cmap='jet')
@@ -1339,12 +1348,15 @@ class MultiStandardAnalyzer:
         print(f"{'='*60}\n")
         
         return colonies_count, original_img, detected_img
-    
+  
 
 
 
 
 
+
+
+  
 
     def analyze_fungal_growth(self, original_img, segmented_img, microorganism=None):
         """
