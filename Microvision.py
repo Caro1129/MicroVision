@@ -1025,51 +1025,48 @@ class MultiStandardAnalyzer:
         clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         enhanced = clahe.apply(masked)
 
-        # --- 5️⃣ Detección de colonias por BLOBS ---
-        blob_params = cv2.SimpleBlobDetector_Params()
-        blob_params.filterByColor = True
-        blob_params.blobColor = 255
-        blob_params.minThreshold = 5
-        blob_params.maxThreshold = 250
-        blob_params.filterByArea = True
-        blob_params.minArea = p['min_area']
-        blob_params.maxArea = p['max_area']
-        blob_params.filterByCircularity = False
-        blob_params.filterByConvexity = False
-        blob_params.filterByInertia = False
+        # --- 5️⃣ Detección mejorada de colonias ---
+        # Umbral adaptativo + apertura para separar el fondo
+        blur2 = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        thresh = cv2.adaptiveThreshold(
+            blur2, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 51, 5
+        )
+        kernel = np.ones((3, 3), np.uint8)
+        opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
 
-        detector = cv2.SimpleBlobDetector_create(blob_params)
-        keypoints = detector.detect(enhanced)
+        # Limpiar ruido pequeño
+        opened = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-        # --- 6️⃣ Filtrar colonias dentro del círculo ---
+        # Distancia y Watershed para separar colonias pegadas
+        dist = cv2.distanceTransform(opened, cv2.DIST_L2, 5)
+        _, sure_fg = cv2.threshold(dist, 0.4 * dist.max(), 255, 0)
+        sure_fg = np.uint8(sure_fg)
+        unknown = cv2.subtract(opened, sure_fg)
+        _, markers = cv2.connectedComponents(sure_fg)
+        markers = markers + 1
+        markers[unknown == 255] = 0
+
+        # Convertir a BGR para watershed
+        ws_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+        markers = cv2.watershed(ws_img, markers)
+
+        # --- 6️⃣ Extraer colonias detectadas dentro del área de la placa ---
         valid_colonies = []
-        centers = []
-        rejected = {'out_of_plate': 0, 'overlapping': 0}
-
-        for kp in keypoints:
-            x, y = int(kp.pt[0]), int(kp.pt[1])
-            r = int(kp.size / 2)
-
+        for label in np.unique(markers):
+            if label <= 1:
+                continue
+            mask = np.uint8(markers == label) * 255
+            if cv2.countNonZero(mask) < p['min_area'] or cv2.countNonZero(mask) > p['max_area']:
+                continue
             # Debe estar dentro de la placa
-            if plate_mask[y, x] == 0:
-                rejected['out_of_plate'] += 1
+            overlap = cv2.bitwise_and(mask, plate_mask)
+            if cv2.countNonZero(overlap) < 0.8 * cv2.countNonZero(mask):
                 continue
-
-            # Evitar solapamiento
-            overlapping = False
-            for cx, cy, cr in centers:
-                dist = np.sqrt((x - cx)**2 + (y - cy)**2)
-                if dist < (r + cr) * 0.6:
-                    overlapping = True
-                    break
-            if overlapping:
-                rejected['overlapping'] += 1
-                continue
-
-            centers.append((x, y, r))
-            valid_colonies.append(kp)
+            valid_colonies.append(mask)
 
         colonies_count = len(valid_colonies)
+
 
         # --- 7️⃣ Dibujar resultados ---
         detected_img = img_rgb.copy()
