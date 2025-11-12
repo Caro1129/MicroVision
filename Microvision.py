@@ -998,13 +998,13 @@ class MultiStandardAnalyzer:
                 'min_inertia': 0.2
             },
             'medium': {
-                'min_threshold': 30,
-                'max_threshold': 200,
-                'min_area': 20,
-                'max_area': 1500,
-                'min_circularity': 0.2,
-                'min_convexity': 0.3,
-                'min_inertia': 0.15
+                'min_threshold': 10,
+                'max_threshold': 230,
+                'min_area': 15,
+                'max_area': 5000,
+                'min_circularity': 0.05,
+                'min_convexity': 0.1,
+                'min_inertia': 0.05
             },
             'high': {
                 'min_threshold': 20,
@@ -1078,6 +1078,9 @@ class MultiStandardAnalyzer:
         # Aplicar CLAHE para mejorar contraste
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         gray_enhanced = clahe.apply(gray_inverted)
+        # Filtro de suavizado ligero y aumento de contraste
+        gray_enhanced = cv2.GaussianBlur(gray_enhanced, (3,3), 0)
+        gray_enhanced = cv2.normalize(gray_enhanced, None, 0, 255, cv2.NORM_MINMAX)
         
         # Aplicar máscara de placa nuevamente
         gray_enhanced = cv2.bitwise_and(gray_enhanced, gray_enhanced, mask=plate_mask)
@@ -1191,9 +1194,16 @@ class MultiStandardAnalyzer:
             x, y = int(kp.pt[0]), int(kp.pt[1])
             radius = int(kp.size / 2)
             
-            # Círculo y centro
-            cv2.circle(detected_img, (x, y), radius, (0, 255, 0), 2)
+            # Rellenar la colonia con color verde semitransparente
+            overlay = detected_img.copy()
+            cv2.circle(overlay, (x, y), radius, (0, 255, 0), -1)
+            alpha = 0.3
+            cv2.addWeighted(overlay, alpha, detected_img, 1 - alpha, 0, detected_img)
+
+            # Marcar el borde y el centro
+            cv2.circle(detected_img, (x, y), radius, (255, 0, 0), 2)
             cv2.circle(detected_img, (x, y), 2, (0, 0, 255), -1)
+
             
             # Número
             font_scale = 0.4 if colonies_count > 100 else 0.5
