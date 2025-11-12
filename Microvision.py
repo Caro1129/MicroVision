@@ -1036,95 +1036,68 @@ class MultiStandardAnalyzer:
         h, w = gray.shape
         print(f"📐 Dimensiones: {w}x{h} px")
 
+        
         # --- 2) DETECCIÓN DE LA PLACA ---
         hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
-        
-        # Detectar fondo amarillo/beige
-        lower_yellow = np.array([15, 20, 80])
-        upper_yellow = np.array([45, 255, 255])
-        yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
-        not_yellow_mask = cv2.bitwise_not(yellow_mask)
-        
-        # Limpiar la máscara
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-        not_yellow_mask = cv2.morphologyEx(not_yellow_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
-        not_yellow_mask = cv2.morphologyEx(not_yellow_mask, cv2.MORPH_OPEN, kernel, iterations=2)
-        
-        # Encontrar el contorno más grande (la placa)
-        contours_plate, _ = cv2.findContours(not_yellow_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if len(contours_plate) > 0:
+
+        # Detectar el borde azul de la caja de Petri
+        lower_blue = np.array([90, 30, 40])
+        upper_blue = np.array([140, 255, 255])
+        blue_mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+        # Limpiar la máscara del borde
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
+        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+        blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_OPEN, kernel, iterations=2)
+
+        # Invertir para obtener el área de la placa (interior)
+        plate_mask = cv2.bitwise_not(blue_mask)
+
+        # Mantener solo la zona central grande (descarta bordes)
+        contours_plate, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if contours_plate:
             largest_contour = max(contours_plate, key=cv2.contourArea)
             plate_mask = np.zeros_like(gray, dtype=np.uint8)
             cv2.drawContours(plate_mask, [largest_contour], -1, 255, -1)
-            
-            # Erosionar ligeramente para evitar bordes
-            kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (20, 20))
+            kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (60, 60))
             plate_mask = cv2.erode(plate_mask, kernel_erode, iterations=1)
-            
-            plate_area = cv2.contourArea(largest_contour)
-            print(f"✅ Placa detectada: {plate_area} px ({plate_area/(h*w)*100:.1f}%)")
         else:
             plate_mask = np.ones_like(gray, dtype=np.uint8) * 255
-            print(f"⚠️ Usando toda la imagen como placa")
-        
-        # Aplicar máscara
+
         gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
 
         # --- 3) PRE-PROCESAMIENTO ---
-        # Invertir imagen (colonias oscuras -> claras)
-        gray_inverted = cv2.equalizeHist(gray_masked)
-        
-        # Aplicar CLAHE para mejorar contraste
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        gray_enhanced = clahe.apply(gray_inverted)
-        # Filtro de suavizado ligero y aumento de contraste
-        gray_enhanced = cv2.GaussianBlur(gray_enhanced, (3,3), 0)
-        gray_enhanced = cv2.normalize(gray_enhanced, None, 0, 255, cv2.NORM_MINMAX)
-        
-        # Aplicar máscara de placa nuevamente
-        gray_enhanced = cv2.bitwise_and(gray_enhanced, gray_enhanced, mask=plate_mask)
-        
-        print(f"🎯 Umbral: min={p['min_threshold']}, max={p['max_threshold']}")
-        print(f"📏 Área: min={p['min_area']}, max={p['max_area']}")
+        # Mejorar contraste
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        gray_enhanced = clahe.apply(gray_masked)
+        gray_enhanced = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
 
-        # --- 4) DETECCIÓN DE BLOBS (SimpleBlobDetector) ---
-        # Configurar detector de blobs
+        # --- 4) DETECCIÓN DE BLOBS ---
         blob_params = cv2.SimpleBlobDetector_Params()
-        
-        # Filtrar por umbral
-        blob_params.minThreshold = p['min_threshold']
-        blob_params.maxThreshold = p['max_threshold']
-        blob_params.thresholdStep = 10
-        
-        # Filtrar por área
-        blob_params.filterByArea = True
-        blob_params.minArea = p['min_area']
-        blob_params.maxArea = p['max_area']
-        
-        # Filtrar por circularidad
-        blob_params.filterByCircularity = True
-        blob_params.minCircularity = p['min_circularity']
-        
-        # Filtrar por convexidad
-        blob_params.filterByConvexity = True
-        blob_params.minConvexity = p['min_convexity']
-        
-        # Filtrar por inercia
-        blob_params.filterByInertia = True
-        blob_params.minInertiaRatio = p['min_inertia']
-        
-        # Filtrar por color (buscar blobs claros)
         blob_params.filterByColor = True
-        blob_params.blobColor = 0
-        
-        # Crear detector
+        blob_params.blobColor = 255  # buscar colonias claras
+        blob_params.minThreshold = 10
+        blob_params.maxThreshold = 220
+        blob_params.filterByArea = True
+        blob_params.minArea = 40
+        blob_params.maxArea = 2500
+        blob_params.filterByCircularity = True
+        blob_params.minCircularity = 0.1
+        blob_params.filterByConvexity = False
+        blob_params.filterByInertia = False
+
         detector = cv2.SimpleBlobDetector_create(blob_params)
-        
-        # Detectar blobs
         keypoints = detector.detect(gray_enhanced)
-        
-        print(f"\n💧 Blobs detectados inicialmente: {len(keypoints)}")
+
+        # Filtrar blobs fuera de la placa
+        valid_colonies = []
+        for kp in keypoints:
+            x, y = int(kp.pt[0]), int(kp.pt[1])
+            if plate_mask[y, x] == 255:
+                valid_colonies.append(kp)
+
+        colonies_count = len(valid_colonies)
+
 
         # --- 5) FILTRADO ADICIONAL ---
         valid_colonies = []
