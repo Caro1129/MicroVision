@@ -1025,90 +1025,71 @@ class MultiStandardAnalyzer:
         clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         enhanced = clahe.apply(masked)
 
-        # --- 5️⃣ Detección mejorada de colonias ---
-        # Umbral adaptativo + apertura para separar el fondo
+        # --- 5️⃣ Preprocesamiento más robusto ---
         blur2 = cv2.GaussianBlur(enhanced, (5, 5), 0)
-        thresh = cv2.adaptiveThreshold(
-            blur2, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 51, 5
-        )
+        _, thresh = cv2.threshold(blur2, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Eliminar ruido pequeño y cerrar huecos
         kernel = np.ones((3, 3), np.uint8)
         opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-        # Limpiar ruido pequeño
-        opened = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=2)
-
-        # Distancia y Watershed para separar colonias pegadas
-        dist = cv2.distanceTransform(opened, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist, 0.4 * dist.max(), 255, 0)
+        # --- 6️⃣ Aplicar Watershed solo donde hay alta densidad ---
+        dist = cv2.distanceTransform(closed, cv2.DIST_L2, 5)
+        _, sure_fg = cv2.threshold(dist, 0.5 * dist.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
-        unknown = cv2.subtract(opened, sure_fg)
+        unknown = cv2.subtract(closed, sure_fg)
         _, markers = cv2.connectedComponents(sure_fg)
         markers = markers + 1
         markers[unknown == 255] = 0
-
-        # Convertir a BGR para watershed
         ws_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
         markers = cv2.watershed(ws_img, markers)
 
-        # --- 6️⃣ Extraer colonias detectadas dentro del área de la placa ---
+        # --- 7️⃣ Filtrado de colonias dentro de la placa ---
         valid_colonies = []
         for label in np.unique(markers):
             if label <= 1:
                 continue
             mask = np.uint8(markers == label) * 255
-            if cv2.countNonZero(mask) < p['min_area'] or cv2.countNonZero(mask) > p['max_area']:
+            area = cv2.countNonZero(mask)
+            if area < p['min_area'] or area > p['max_area']:
                 continue
-            # Debe estar dentro de la placa
+
             overlap = cv2.bitwise_and(mask, plate_mask)
-            if cv2.countNonZero(overlap) < 0.8 * cv2.countNonZero(mask):
+            if cv2.countNonZero(overlap) < 0.85 * area:
                 continue
-            valid_colonies.append(mask)
+
+            # Filtro de circularidad para evitar reflejos
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if len(contours) == 0:
+                continue
+            cnt = contours[0]
+            area = cv2.contourArea(cnt)
+            perimeter = cv2.arcLength(cnt, True)
+            if perimeter == 0:
+                continue
+            circularity = 4 * np.pi * (area / (perimeter * perimeter))
+            if circularity < 0.5:  # evita manchas amorfas
+                continue
+
+            valid_colonies.append(cnt)
 
         colonies_count = len(valid_colonies)
 
-
-        # --- 7️⃣ Dibujar resultados ---
+        # --- 8️⃣ Dibujar resultados ---
         detected_img = img_rgb.copy()
-
         if center:
             cv2.circle(detected_img, center, int(radius * 0.93), (255, 255, 0), 2)
 
-        # Dibujar colonias detectadas (válido para máscaras)
-        for i, mask in enumerate(valid_colonies):
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for c in contours:
-                area = cv2.contourArea(c)
-                if p['min_area'] < area < p['max_area']:
-                    (x, y), r = cv2.minEnclosingCircle(c)
-                    cv2.circle(detected_img, (int(x), int(y)), int(r), (0, 255, 0), 2)
-                    cv2.putText(detected_img, str(i + 1), (int(x) - 8, int(y) + 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+        for i, c in enumerate(valid_colonies):
+            (x, y), r = cv2.minEnclosingCircle(c)
+            cv2.circle(detected_img, (int(x), int(y)), int(r), (0, 255, 0), 2)
+            cv2.putText(detected_img, str(i + 1), (int(x) - 8, int(y) + 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
-        cv2.rectangle(detected_img, (5, 5), (320, 45), (0, 0, 0), -1)
+        cv2.rectangle(detected_img, (5, 5), (300, 45), (0, 0, 0), -1)
         cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-
-        # --- 8️⃣ Modo debug (opcional) ---
-        if debug:
-            img_with_keypoints = cv2.drawKeypoints(
-                enhanced, keypoints, np.array([]), (0, 0, 255),
-                cv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS
-            )
-
-            fig, axes = plt.subplots(2, 3, figsize=(14, 9))
-            axes[0, 0].imshow(gray, cmap='gray'); axes[0, 0].set_title("Gris original")
-            axes[0, 1].imshow(plate_mask, cmap='gray'); axes[0, 1].set_title("Máscara de placa")
-            axes[0, 2].imshow(enhanced, cmap='gray'); axes[0, 2].set_title("Contraste mejorado")
-            axes[1, 0].imshow(img_with_keypoints); axes[1, 0].set_title(f"Blobs detectados ({len(keypoints)})")
-            axes[1, 1].imshow(detected_img); axes[1, 1].set_title(f"Colonias válidas ({colonies_count})")
-            axes[1, 2].imshow(masked, cmap='gray'); axes[1, 2].set_title("Zona analizada")
-
-            for ax in axes.flat: ax.axis('off')
-            plt.tight_layout()
-            st.pyplot(fig)
-            plt.close()
 
         return colonies_count, original_img, detected_img
 
