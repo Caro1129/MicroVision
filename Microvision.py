@@ -977,15 +977,15 @@ class MultiStandardAnalyzer:
         import numpy as np
         import streamlit as st
 
-        # --- Parámetros base de sensibilidad ---
+        # --- Parámetros de sensibilidad ---
         params = {
-            'low': {'blur': 7, 'blockSize': 41, 'C': 4},
-            'medium': {'blur': 9, 'blockSize': 41, 'C': 2},
-            'high': {'blur': 11, 'blockSize': 39, 'C': 1}
+            'low': {'blur': 5},
+            'medium': {'blur': 7},
+            'high': {'blur': 9}
         }
         p = params.get(sensitivity, params['medium'])
 
-        # --- Convertir a gris si es necesario ---
+        # --- Convertir a gris ---
         if len(original_img.shape) == 2:
             gray = original_img
             img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2BGR)
@@ -1015,29 +1015,35 @@ class MultiStandardAnalyzer:
         masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
         masked = cv2.GaussianBlur(masked, (5, 5), 0)
 
-        # --- 3️⃣ Ecualización y umbral adaptativo ---
+        # --- 3️⃣ Ecualización y umbralización híbrida ---
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(masked)
 
-        thresh = cv2.adaptiveThreshold(
-            enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV,
-            p['blockSize'], p['C']
-        )
+        # Primer intento: umbral adaptativo
+        thresh_adapt = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                            cv2.THRESH_BINARY_INV, 41, 2)
 
-        # --- 4️⃣ Operaciones morfológicas ---
+        # Segundo intento: Otsu si el adaptativo falla
+        if np.sum(thresh_adapt) < 10000:  # si casi no detecta nada
+            _, thresh_otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            thresh = thresh_otsu
+        else:
+            thresh = thresh_adapt
+
+        # --- 4️⃣ Morfología para limpieza ---
         kernel = np.ones((3, 3), np.uint8)
         opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
         opening = cv2.dilate(opening, kernel, iterations=1)
 
-        # --- 5️⃣ Ajuste dinámico de áreas válidas según tamaño de placa ---
+        # --- 5️⃣ Definir área válida según radio ---
         if radius:
             total_area = np.pi * (radius ** 2)
-            min_area = max(0.0002 * total_area, 30)
-            max_area = max(0.015 * total_area, 1200)
+            min_area = max(0.0001 * total_area, 25)
+            max_area = max(0.01 * total_area, 2000)
         else:
-            min_area, max_area = 60, 1800
+            min_area, max_area = 50, 2000
 
-        # --- 6️⃣ Contornos de colonias ---
+        # --- 6️⃣ Buscar colonias dentro del círculo ---
         contours, _ = cv2.findContours(opening, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         valid = []
 
@@ -1050,7 +1056,7 @@ class MultiStandardAnalyzer:
                         continue
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
-                    # ✅ Verificar que esté dentro del círculo
+                    # ✅ dentro del círculo
                     if (cx - center[0]) ** 2 + (cy - center[1]) ** 2 <= (radius * 0.9) ** 2:
                         valid.append(c)
         else:
@@ -1060,24 +1066,25 @@ class MultiStandardAnalyzer:
 
         # --- 7️⃣ Dibujar resultados ---
         detected_img = img_rgb.copy()
-        if contours:
-            cv2.drawContours(detected_img, valid, -1, (0, 255, 0), 2)
-            if center:
-                cv2.circle(detected_img, center, int(radius * 0.93), (255, 255, 0), 2)
+        if center:
+            cv2.circle(detected_img, center, int(radius * 0.93), (255, 255, 0), 2)
+        cv2.drawContours(detected_img, valid, -1, (0, 255, 0), 2)
 
         cv2.rectangle(detected_img, (5, 5), (300, 45), (0, 0, 0), -1)
         cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # --- 8️⃣ Debug ---
+        # --- 8️⃣ Debug opcional ---
         if debug:
             st.image(gray, caption="Imagen gris", use_container_width=True)
             st.image(plate_mask, caption="Máscara de placa", use_container_width=True)
             st.image(enhanced, caption="Contraste mejorado", use_container_width=True)
+            st.image(thresh, caption="Umbral (binario)", use_container_width=True)
             st.image(opening, caption="Colonias segmentadas", use_container_width=True)
             st.image(detected_img, caption="Colonias detectadas", use_container_width=True)
 
         return colonies_count, original_img, detected_img
+
 
 
 
