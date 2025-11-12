@@ -974,16 +974,18 @@ class MultiStandardAnalyzer:
 
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
-        Conteo de colonias robusto:
-        - Detección confiable de la caja de Petri (basado en contornos circulares)
-        - Conteo preciso mediante SimpleBlobDetector
+        Conteo robusto de colonias bacterianas:
+        - Detección de la placa de Petri
+        - Segmentación híbrida (threshold + distance transform)
+        - Separación automática de colonias pegadas
+        - Filtrado por área, circularidad y posición
         """
         import cv2
         import numpy as np
-        import streamlit as st
         import matplotlib.pyplot as plt
+        import streamlit as st
 
-        # === PARÁMETROS DE SENSIBILIDAD ===
+        # --- PARÁMETROS DE SENSIBILIDAD ---
         params = {
             'low': {'blur': 5, 'min_area': 40, 'max_area': 2500},
             'medium': {'blur': 7, 'min_area': 20, 'max_area': 5000},
@@ -999,7 +1001,7 @@ class MultiStandardAnalyzer:
             gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
             img_rgb = original_img.copy()
 
-        # --- 2️⃣ Detección robusta del área de la placa ---
+        # --- 2️⃣ Detección de la placa ---
         blur = cv2.GaussianBlur(gray, (p['blur'], p['blur']), 0)
         edges = cv2.Canny(blur, 40, 120)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1017,102 +1019,96 @@ class MultiStandardAnalyzer:
         else:
             plate_mask[:] = 255
 
-        # --- 3️⃣ Aplicar máscara circular ---
+        # --- 3️⃣ Preprocesamiento ---
         masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        masked = cv2.GaussianBlur(masked, (3, 3), 0)
-
-        # --- 4️⃣ Mejorar contraste ---
         clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        enhanced = clahe.apply(masked)
+        enhanced = clahe.apply(cv2.GaussianBlur(masked, (3, 3), 0))
 
-        # --- 5️⃣ Preprocesamiento optimizado para colonias claras sobre fondo oscuro ---
-        blur2 = cv2.GaussianBlur(enhanced, (7, 7), 0)
-
-        # Invertir si las colonias son más claras que el fondo
-        if np.mean(blur2) < 128:
-            inv = cv2.bitwise_not(blur2)
-        else:
-            inv = blur2.copy()
-
-        # Umbral adaptativo para captar las colonias sin eliminar las pequeñas
-        thresh = cv2.adaptiveThreshold(
-            inv, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY, 35, -5
-        )
-
-        # Eliminar ruido pequeño
+        # --- 4️⃣ Binarización adaptativa ---
+        meanv = np.mean(enhanced)
+        proc = cv2.bitwise_not(enhanced) if meanv < 128 else enhanced
+        _, binary = cv2.threshold(proc, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         kernel = np.ones((3, 3), np.uint8)
-        opened = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
-        closed = cv2.morphologyEx(opened, cv2.MORPH_CLOSE, kernel, iterations=1)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+        binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
-        # --- 6️⃣ Etiquetar y filtrar colonias ---
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(closed, connectivity=8)
-        valid_colonies = []
+        # --- 5️⃣ Distance Transform + separación de colonias ---
+        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
+        _, sure_fg = cv2.threshold(dist, 0.35 * dist.max(), 255, 0)
+        sure_fg = np.uint8(sure_fg)
+        unknown = cv2.subtract(binary, sure_fg)
+        _, markers = cv2.connectedComponents(sure_fg)
+        markers = markers + 1
+        markers[unknown == 255] = 0
 
-        for i in range(1, num_labels):
-            area = stats[i, cv2.CC_STAT_AREA]
-            x, y, w, h = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP], \
-                        stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+        # --- 6️⃣ Watershed para separar colonias pegadas ---
+        color_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+        markers = cv2.watershed(color_img, markers)
 
-            # Filtros de área
+        # --- 7️⃣ Filtrar componentes válidas ---
+        valid_centroids, valid_contours = [], []
+        unique_labels = np.unique(markers)
+
+        for label in unique_labels:
+            if label <= 1:
+                continue
+            mask = np.uint8(markers == label) * 255
+            area = cv2.countNonZero(mask)
             if area < p['min_area'] or area > p['max_area']:
                 continue
 
-            # Solo dentro de la placa
-            cx, cy = int(centroids[i][0]), int(centroids[i][1])
-            if plate_mask[cy, cx] == 0:
-                continue
-
-            # Filtro de circularidad
-            mask = np.uint8(labels == i) * 255
+            # centro y contorno
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if len(contours) == 0:
+            if not contours:
                 continue
             cnt = contours[0]
-            area = cv2.contourArea(cnt)
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0:
-                continue
-            circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            if circularity < 0.4:
+            (x, y), r = cv2.minEnclosingCircle(cnt)
+            circularity = 4 * np.pi * cv2.contourArea(cnt) / (cv2.arcLength(cnt, True) ** 2 + 1e-5)
+            if circularity < 0.35:
                 continue
 
-            valid_colonies.append(cnt)
+            valid_centroids.append((int(x), int(y)))
+            valid_contours.append(cnt)
 
-        colonies_count = len(valid_colonies)
-
-        # --- 7️⃣ Dibujar resultados ---
-        detected_img = img_rgb.copy()
-        if center:
-            cv2.circle(detected_img, center, int(radius * 0.93), (255, 255, 0), 2)
-
-        for i, c in enumerate(valid_colonies):
-            (x, y), r = cv2.minEnclosingCircle(c)
-            cv2.circle(detected_img, (int(x), int(y)), int(r), (0, 255, 0), 2)
-            cv2.putText(detected_img, str(i + 1), (int(x) - 8, int(y) + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-
-        cv2.rectangle(detected_img, (5, 5), (300, 45), (0, 0, 0), -1)
-        cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
+        colonies_count = len(valid_centroids)
 
         # --- 8️⃣ Dibujar resultados ---
         detected_img = img_rgb.copy()
         if center:
             cv2.circle(detected_img, center, int(radius * 0.93), (255, 255, 0), 2)
 
-        for i, c in enumerate(valid_colonies):
-            (x, y), r = cv2.minEnclosingCircle(c)
-            cv2.circle(detected_img, (int(x), int(y)), int(r), (0, 255, 0), 2)
-            cv2.putText(detected_img, str(i + 1), (int(x) - 8, int(y) + 5),
+        for i, (cx, cy) in enumerate(valid_centroids):
+            cv2.circle(detected_img, (cx, cy), 7, (0, 255, 0), 2)
+            cv2.putText(detected_img, str(i + 1), (cx - 6, cy + 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
-        cv2.rectangle(detected_img, (5, 5), (300, 45), (0, 0, 0), -1)
+        cv2.rectangle(detected_img, (5, 5), (320, 45), (0, 0, 0), -1)
         cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
+        # --- 9️⃣ Modo debug ---
+        if debug:
+            fig, axes = plt.subplots(2, 3, figsize=(15, 9))
+            axes[0, 0].imshow(gray, cmap='gray'); axes[0, 0].set_title("Original (gris)")
+            axes[0, 1].imshow(enhanced, cmap='gray'); axes[0, 1].set_title("Contraste mejorado")
+            axes[0, 2].imshow(binary, cmap='gray'); axes[0, 2].set_title("Binaria limpia")
+            axes[1, 0].imshow(dist, cmap='jet'); axes[1, 0].set_title("Distance Transform")
+            axes[1, 1].imshow(markers, cmap='nipy_spectral'); axes[1, 1].set_title("Watershed")
+            axes[1, 2].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)); axes[1, 2].set_title(f"Colonias detectadas: {colonies_count}")
+            for ax in axes.flat: ax.axis('off')
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
+
+        print(f"\n{'='*60}")
+        print(f"🔬 Colonias detectadas: {colonies_count}")
+        print(f"{'='*60}\n")
+
         return colonies_count, original_img, detected_img
+
+
+       
 
 
 
