@@ -1078,10 +1078,12 @@ class MultiStandardAnalyzer:
         # Mejorar contraste y suavizar
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray_masked)
-        blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
+        blur = cv2.GaussianBlur(enhanced, (9, 9), 0)
 
         # Binarización adaptativa
-        _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        thresh = cv2.adaptiveThreshold(
+            blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 35, 2
+        )
 
         # Limpieza de ruido
         kernel = np.ones((3, 3), np.uint8)
@@ -1111,7 +1113,7 @@ class MultiStandardAnalyzer:
         keypoints = []
         for c in contours:
             area = cv2.contourArea(c)
-            if 50 < area < 5000:  # rango típico de colonias
+            if 20 < area < 15000:  # rango típico de colonias
                 M = cv2.moments(c)
                 if M['m00'] != 0:
                     cx = int(M['m10'] / M['m00'])
