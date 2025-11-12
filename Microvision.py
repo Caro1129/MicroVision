@@ -982,7 +982,7 @@ class MultiStandardAnalyzer:
         import numpy as np
         import matplotlib.pyplot as plt
 
-        print("\n🔬 Conteo de colonias calibrado para placas densas (~80 colonias)")
+        print("\n🔬 Conteo de colonias calibrado para placas densas (80–200 colonias)")
 
         # --- 1) Preparar imagen ---
         img = original_img.copy()
@@ -1016,50 +1016,46 @@ class MultiStandardAnalyzer:
             cv2.circle(plate_mask, (x, y), r, 255, -1)
             plate_center, plate_radius = (x, y), r
 
-        # --- 3) PRE-PROCESAMIENTO --- 
+        # --- 3) PRE-PROCESAMIENTO ---
         gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-
-        # Mejorar contraste y suavizar
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(gray_masked)
         blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
 
-        # 🔁 Invertir si el fondo es claro (corrección automática)
+        # 🔁 Invertir si el fondo es claro
         mean_intensity = np.mean(blur)
         if mean_intensity > 127:
-            print("Fondo claro detectado → Invirtiendo imagen para mejor segmentación")
+            print("🟡 Fondo claro detectado → Invirtiendo imagen")
             blur = cv2.bitwise_not(blur)
 
-        # --- 4) BINARIZACIÓN ADAPTATIVA ---
-        thresh = cv2.adaptiveThreshold(
-            blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 35, 2
-        )
-
+        # --- 4) BINARIZACIÓN ROBUSTA (Otsu + apertura) ---
+        _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         kernel = np.ones((3, 3), np.uint8)
-        opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+        opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
         sure_bg = cv2.dilate(opening, kernel, iterations=3)
 
+        # --- 5) Separación de colonias pegadas ---
         dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist_transform, 0.35 * dist_transform.max(), 255, 0)
+        _, sure_fg = cv2.threshold(dist_transform, 0.25 * dist_transform.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
         unknown = cv2.subtract(sure_bg, sure_fg)
 
-        # --- 5) Watershed ---
+        # --- 6) Watershed ---
         _, markers = cv2.connectedComponents(sure_fg)
         markers = markers + 1
         markers[unknown == 255] = 0
 
-        img_ws = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
-        markers = cv2.watershed(img_ws, markers)
-        img_ws[markers == -1] = [255, 0, 0]
+        ws_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
+        markers = cv2.watershed(ws_img, markers)
+        ws_img[markers == -1] = [255, 0, 0]
 
-        # --- 6) Contornos finales ---
+        # --- 7) Contornos finales ---
         contours, _ = cv2.findContours(sure_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         valid_contours = []
         for c in contours:
             area = cv2.contourArea(c)
-            if 30 < area < 6000:
+            if 20 < area < 8000:  # Ajuste sensible
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
@@ -1070,7 +1066,7 @@ class MultiStandardAnalyzer:
         colonies_count = len(valid_contours)
         print(f"✅ Colonias detectadas: {colonies_count}")
 
-        # --- 7) Visualización ---
+        # --- 8) Visualización ---
         detected_img = img_rgb.copy()
         for i, c in enumerate(valid_contours):
             M = cv2.moments(c)
@@ -1082,29 +1078,24 @@ class MultiStandardAnalyzer:
                 cv2.putText(detected_img, str(i + 1), (cx - 5, cy - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
 
-        # Dibujar borde de la placa
         cv2.circle(detected_img, plate_center, plate_radius, (255, 255, 0), 2)
         text = f"COLONIAS: {colonies_count}"
         cv2.rectangle(detected_img, (5, 5), (250, 45), (0, 0, 0), -1)
         cv2.putText(detected_img, text, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # --- 8) Debug opcional ---
+        # --- 9) Debug opcional ---
         if debug:
-            fig, ax = plt.subplots(1, 3, figsize=(18, 6))
+            fig, ax = plt.subplots(1, 4, figsize=(20, 6))
             ax[0].imshow(gray, cmap='gray'); ax[0].set_title('Original (Gray)')
-            ax[1].imshow(thresh, cmap='gray'); ax[1].set_title('Umbral adaptativo')
-            ax[2].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
-            ax[2].set_title(f'Detectadas: {colonies_count}')
+            ax[1].imshow(blur, cmap='gray'); ax[1].set_title('Preprocesada')
+            ax[2].imshow(otsu, cmap='gray'); ax[2].set_title('Umbral Otsu')
+            ax[3].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
+            ax[3].set_title(f'Detectadas: {colonies_count}')
             for a in ax: a.axis('off')
             plt.tight_layout()
             plt.show()
 
         return colonies_count, original_img, cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)
-
-
-
-
-
 
 
 
