@@ -1022,25 +1022,35 @@ class MultiStandardAnalyzer:
         enhanced = clahe.apply(gray_masked)
         blur = cv2.GaussianBlur(enhanced, (5, 5), 0)
 
-        # 🟢 Fondo oscuro → no invertimos
-        print("🟢 Fondo oscuro detectado → NO se invierte la imagen")
+        cv2.imwrite("debug1_gray_masked.png", gray_masked)
+        cv2.imwrite("debug2_enhanced.png", enhanced)
+        cv2.imwrite("debug3_blur.png", blur)
 
-        # --- 4) BINARIZACIÓN AJUSTADA (colonias claras sobre fondo oscuro) ---
-        # Detecta colonias claras directamente
+        print("🧩 Imágenes intermedias guardadas: gray_masked / enhanced / blur")
+
+        # --- 4) BINARIZACIÓN ---
         _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        cv2.imwrite("debug4_otsu.png", otsu)
 
-        # Limpieza del ruido (elimina puntos pequeños)
         kernel = np.ones((3, 3), np.uint8)
         opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
+        cv2.imwrite("debug5_opening.png", opening)
 
-        # Expandimos un poco para unir bordes rotos de colonias
+        # Fondo y foreground
         sure_bg = cv2.dilate(opening, kernel, iterations=3)
+        cv2.imwrite("debug6_sure_bg.png", sure_bg)
 
-        # Cálculo de regiones centrales (foreground)
         dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
+        dist_norm = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        cv2.imwrite("debug7_distance.png", dist_norm)
+
         _, sure_fg = cv2.threshold(dist_transform, 0.25 * dist_transform.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
+        cv2.imwrite("debug8_sure_fg.png", sure_fg)
+
         unknown = cv2.subtract(sure_bg, sure_fg)
+        cv2.imwrite("debug9_unknown.png", unknown)
+
 
         # --- 5) Watershed ---
         _, markers = cv2.connectedComponents(sure_fg)
