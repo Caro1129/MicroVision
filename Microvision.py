@@ -972,110 +972,91 @@ class MultiStandardAnalyzer:
 
     
 
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False):
+    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         import cv2
         import numpy as np
         import streamlit as st
-        import traceback
 
-        try:
-            # --- Preparar imagen ---
-            if original_img is None:
-                st.error("⚠️ No se cargó ninguna imagen.")
-                return 0, None, None
+        # --- Parámetros de sensibilidad ---
+        params = {
+            'low': {'min_area': 40, 'max_area': 2500, 'blur': 7},
+            'medium': {'min_area': 60, 'max_area': 1800, 'blur': 9},
+            'high': {'min_area': 80, 'max_area': 1200, 'blur': 11}
+        }
+        p = params.get(sensitivity, params['medium'])
 
-            if len(original_img.shape) == 2:
-                gray = original_img
-                img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
-            else:
-                gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-                img_rgb = original_img.copy()
+        # --- Preparar imagen ---
+        if len(original_img.shape) == 2:
+            gray = original_img
+            img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
+        else:
+            gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
+            img_rgb = original_img.copy()
 
-            # --- 1️⃣ Detección de placa ---
-            blur = cv2.GaussianBlur(gray, (7, 7), 0)
-            edges = cv2.Canny(blur, 30, 100)
-            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # --- 1️⃣ Detección robusta del área de la placa ---
+        blur = cv2.GaussianBlur(gray, (p['blur'], p['blur']), 0)
+        edges = cv2.Canny(blur, 40, 120)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            plate_mask = np.zeros_like(gray, dtype=np.uint8)
-            largest = None
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-                (x, y), radius = cv2.minEnclosingCircle(largest)
-                if radius > 50:
-                    cv2.circle(plate_mask, (int(x), int(y)), int(radius * 0.92), 255, -1)
-                else:
-                    plate_mask[:] = 255
+        plate_mask = np.zeros_like(gray, dtype=np.uint8)
+        if contours:
+            largest = max(contours, key=cv2.contourArea)
+            (x, y), radius = cv2.minEnclosingCircle(largest)
+            if radius > 50:
+                cv2.circle(plate_mask, (int(x), int(y)), int(radius * 0.93), 255, -1)
             else:
                 plate_mask[:] = 255
+        else:
+            plate_mask[:] = 255
 
-            # --- 2️⃣ Aplicar máscara circular ---
-            masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+        # --- 2️⃣ Aplicar máscara circular y eliminar borde brillante ---
+        masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+        masked = cv2.GaussianBlur(masked, (5, 5), 0)
 
-            # --- 3️⃣ Mejorar contraste ---
-            clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-            enhanced = clahe.apply(masked)
+        # --- 3️⃣ Ecualización y umbral adaptativo para aislar colonias ---
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(masked)
+        thresh = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                    cv2.THRESH_BINARY_INV, 41, 2)
 
-            # --- 4️⃣ Umbral inverso (colonias claras) ---
-            _, otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # --- 4️⃣ Operaciones morfológicas para eliminar ruido pequeño ---
+        kernel = np.ones((3, 3), np.uint8)
+        opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
 
-            # --- 5️⃣ Limpieza ---
-            kernel = np.ones((3, 3), np.uint8)
-            opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
-            sure_bg = cv2.dilate(opening, kernel, iterations=3)
+        # --- 5️⃣ Encontrar contornos de colonias ---
+        contours, _ = cv2.findContours(opening, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        valid = []
+        for c in contours:
+            area = cv2.contourArea(c)
+            if p['min_area'] < area < p['max_area']:
+                M = cv2.moments(c)
+                if M["m00"] == 0:
+                    continue
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                if plate_mask[cy, cx] == 255:
+                    valid.append(c)
 
-            # --- 6️⃣ Distancia euclidiana ---
-            dist = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-            _, sure_fg = cv2.threshold(dist, 0.25 * dist.max(), 255, 0)
-            sure_fg = np.uint8(sure_fg)
-            unknown = cv2.subtract(sure_bg, sure_fg)
+        colonies_count = len(valid)
 
-            # --- 7️⃣ Watershed ---
-            num_markers, markers = cv2.connectedComponents(sure_fg)
-            markers = markers + 1
-            markers[unknown == 255] = 0
-            markers = cv2.watershed(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR), markers)
+        # --- 6️⃣ Dibujar resultados ---
+        detected_img = img_rgb.copy()
+        cv2.drawContours(detected_img, valid, -1, (0, 255, 0), 2)
+        cv2.drawContours(detected_img, [largest], -1, (255, 255, 0), 2)
 
-            # --- 8️⃣ Colonias finales ---
-            colonies_mask = np.uint8(markers > 1) * 255
-            contours, _ = cv2.findContours(colonies_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.rectangle(detected_img, (5, 5), (260, 45), (0, 0, 0), -1)
+        cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-            valid = []
-            for c in contours:
-                area = cv2.contourArea(c)
-                if 30 < area < 3500:
-                    M = cv2.moments(c)
-                    if M["m00"] != 0:
-                        cx = int(M["m10"] / M["m00"])
-                        cy = int(M["m01"] / M["m00"])
-                        if 0 <= cy < plate_mask.shape[0] and 0 <= cx < plate_mask.shape[1]:
-                            if plate_mask[cy, cx] == 255:
-                                valid.append(c)
+        # --- 7️⃣ Modo depuración opcional ---
+        if debug:
+            st.image(gray, caption="Imagen gris", use_container_width=True)
+            st.image(plate_mask, caption="Máscara de placa", use_container_width=True)
+            st.image(enhanced, caption="Contraste mejorado", use_container_width=True)
+            st.image(opening, caption="Colonias segmentadas", use_container_width=True)
 
-            colonies_count = len(valid)
+        return colonies_count, original_img, detected_img
 
-            # --- 9️⃣ Dibujar ---
-            detected_img = img_rgb.copy()
-            cv2.drawContours(detected_img, valid, -1, (0, 255, 0), 2)
-            if largest is not None:
-                cv2.drawContours(detected_img, [largest], -1, (255, 255, 0), 2)
-
-            cv2.rectangle(detected_img, (5, 5), (260, 45), (0, 0, 0), -1)
-            cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-            # --- 🔍 Visualización (solo si debug=True) ---
-            if debug:
-                st.image(gray, caption="1️⃣ Imagen original (gris)", use_container_width=True)
-                st.image(enhanced, caption="2️⃣ Contraste mejorado", use_container_width=True)
-                st.image(opening, caption="3️⃣ Máscara binaria limpia", use_container_width=True)
-                st.image(colonies_mask, caption="4️⃣ Colonias segmentadas", use_container_width=True)
-
-            return colonies_count, original_img, detected_img
-
-        except Exception as e:
-            st.error("❌ Error durante el conteo de colonias.")
-            st.code(traceback.format_exc())
-            return 0, None, None
 
 
 
