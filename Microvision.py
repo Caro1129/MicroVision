@@ -1028,44 +1028,39 @@ class MultiStandardAnalyzer:
             print("🟡 Fondo claro detectado → Invirtiendo imagen")
             blur = cv2.bitwise_not(blur)
 
-        # --- 4) BINARIZACIÓN ROBUSTA (Otsu + apertura) ---
+        # --- 4) BINARIZACIÓN AJUSTADA (colonias claras sobre fondo oscuro) ---
+        # No invertimos, usamos directamente Otsu
         _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        import streamlit as st
 
-        st.image(blur, caption="🔹 Imagen preprocesada (blur)", channels="GRAY")
-        st.image(otsu, caption="🔹 Umbral Otsu binario", channels="GRAY")
-
-        opening_debug = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, np.ones((3,3), np.uint8), iterations=2)
-        st.image(opening_debug, caption="🔹 Máscara tras apertura morfológica", channels="GRAY")
-
-        st.info("Estas son las imágenes intermedias de depuración (no se descargan, solo se visualizan aquí).")
-
+        # Limpieza del ruido (elimina puntos pequeños)
         kernel = np.ones((3, 3), np.uint8)
         opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
+
+        # Expandimos un poco para unir bordes rotos de colonias
         sure_bg = cv2.dilate(opening, kernel, iterations=3)
 
-        # --- 5) Separación de colonias pegadas ---
+        # Cálculo de regiones centrales (foreground)
         dist_transform = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist_transform, 0.25 * dist_transform.max(), 255, 0)
+        _, sure_fg = cv2.threshold(dist_transform, 0.35 * dist_transform.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
         unknown = cv2.subtract(sure_bg, sure_fg)
 
-        # --- 6) Watershed ---
+        # --- 5) Watershed ---
         _, markers = cv2.connectedComponents(sure_fg)
         markers = markers + 1
         markers[unknown == 255] = 0
 
-        ws_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
-        markers = cv2.watershed(ws_img, markers)
-        ws_img[markers == -1] = [255, 0, 0]
+        img_ws = cv2.cvtColor(blur, cv2.COLOR_GRAY2BGR)
+        markers = cv2.watershed(img_ws, markers)
+        img_ws[markers == -1] = [255, 0, 0]
 
-        # --- 7) Contornos finales ---
+        # --- 6) Contornos finales ---
         contours, _ = cv2.findContours(sure_fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         valid_contours = []
         for c in contours:
             area = cv2.contourArea(c)
-            if 20 < area < 8000:  # Ajuste sensible
+            if 30 < area < 6000:
                 M = cv2.moments(c)
                 if M["m00"] != 0:
                     cx = int(M["m10"] / M["m00"])
@@ -1076,7 +1071,8 @@ class MultiStandardAnalyzer:
         colonies_count = len(valid_contours)
         print(f"✅ Colonias detectadas: {colonies_count}")
 
-        # --- 8) Visualización ---
+
+        # --- 7) Visualización ---
         detected_img = img_rgb.copy()
         for i, c in enumerate(valid_contours):
             M = cv2.moments(c)
@@ -1093,7 +1089,7 @@ class MultiStandardAnalyzer:
         cv2.rectangle(detected_img, (5, 5), (250, 45), (0, 0, 0), -1)
         cv2.putText(detected_img, text, (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # --- 9) Debug opcional ---
+        # --- 8) Debug opcional ---
         if debug:
             fig, ax = plt.subplots(1, 4, figsize=(20, 6))
             ax[0].imshow(gray, cmap='gray'); ax[0].set_title('Original (Gray)')
