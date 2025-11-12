@@ -975,16 +975,17 @@ class MultiStandardAnalyzer:
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         import cv2
         import numpy as np
-        import matplotlib.pyplot as plt
         import streamlit as st
 
+        # --- Parámetros de sensibilidad ---
         params = {
-            'low': {'min_threshold': 40, 'max_threshold': 180, 'min_area': 50, 'max_area': 2500},
-            'medium': {'min_threshold': 5, 'max_threshold': 250, 'min_area': 10, 'max_area': 8000},
-            'high': {'min_threshold': 20, 'max_threshold': 220, 'min_area': 10, 'max_area': 1000}
+            'low': {'min_area': 40, 'max_area': 2500, 'blur': 7},
+            'medium': {'min_area': 60, 'max_area': 1800, 'blur': 9},
+            'high': {'min_area': 80, 'max_area': 1200, 'blur': 11}
         }
         p = params.get(sensitivity, params['medium'])
 
+        # --- Preparar imagen ---
         if len(original_img.shape) == 2:
             gray = original_img
             img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
@@ -992,78 +993,70 @@ class MultiStandardAnalyzer:
             gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
             img_rgb = original_img.copy()
 
-        # === 1) Detección robusta de la placa ===
-        blur = cv2.GaussianBlur(gray, (11, 11), 0)
-        edges = cv2.Canny(blur, 30, 100)
+        # --- 1️⃣ Detección robusta del área de la placa ---
+        blur = cv2.GaussianBlur(gray, (p['blur'], p['blur']), 0)
+        edges = cv2.Canny(blur, 40, 120)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         plate_mask = np.zeros_like(gray, dtype=np.uint8)
         if contours:
             largest = max(contours, key=cv2.contourArea)
             (x, y), radius = cv2.minEnclosingCircle(largest)
-            if radius > 50:  # evitar falsos círculos pequeños
-                cv2.circle(plate_mask, (int(x), int(y)), int(radius * 0.95), 255, -1)
+            if radius > 50:
+                cv2.circle(plate_mask, (int(x), int(y)), int(radius * 0.93), 255, -1)
             else:
                 plate_mask[:] = 255
         else:
             plate_mask[:] = 255
 
-        gray_masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+        # --- 2️⃣ Aplicar máscara circular y eliminar borde brillante ---
+        masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+        masked = cv2.GaussianBlur(masked, (5, 5), 0)
 
-        # === 2) Mejora de contraste ===
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        gray_enhanced = clahe.apply(gray_masked)
-        gray_enhanced = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
+        # --- 3️⃣ Ecualización y umbral adaptativo para aislar colonias ---
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(masked)
+        thresh = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                    cv2.THRESH_BINARY_INV, 41, 2)
 
-        # === 3) Detección de colonias (blobs claros) ===
-        params = cv2.SimpleBlobDetector_Params()
-        params.filterByColor = True
-        params.blobColor = 255
-        params.minThreshold = p['min_threshold']
-        params.maxThreshold = p['max_threshold']
-        params.filterByArea = True
-        params.minArea = p['min_area']
-        params.maxArea = p['max_area']
-        params.filterByCircularity = False
-        params.filterByConvexity = False
-        params.filterByInertia = False
+        # --- 4️⃣ Operaciones morfológicas para eliminar ruido pequeño ---
+        kernel = np.ones((3, 3), np.uint8)
+        opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
 
-        detector = cv2.SimpleBlobDetector_create(params)
-        keypoints = detector.detect(gray_enhanced)
-
-        # === 4) Filtrar solo dentro de la placa circular ===
+        # --- 5️⃣ Encontrar contornos de colonias ---
+        contours, _ = cv2.findContours(opening, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         valid = []
-        for kp in keypoints:
-            x, y = int(kp.pt[0]), int(kp.pt[1])
-            if 0 <= y < plate_mask.shape[0] and 0 <= x < plate_mask.shape[1]:
-                if plate_mask[y, x] == 255:
-                    valid.append(kp)
+        for c in contours:
+            area = cv2.contourArea(c)
+            if p['min_area'] < area < p['max_area']:
+                M = cv2.moments(c)
+                if M["m00"] == 0:
+                    continue
+                cx = int(M["m10"] / M["m00"])
+                cy = int(M["m01"] / M["m00"])
+                if plate_mask[cy, cx] == 255:
+                    valid.append(c)
+
         colonies_count = len(valid)
 
-        # === 5) Visualización final ===
+        # --- 6️⃣ Dibujar resultados ---
         detected_img = img_rgb.copy()
-        for i, kp in enumerate(valid):
-            x, y = int(kp.pt[0]), int(kp.pt[1])
-            r = int(kp.size / 2)
-            cv2.circle(detected_img, (x, y), r, (0, 255, 0), 2)
-            cv2.putText(detected_img, str(i + 1), (x - 8, y + 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 1)
+        cv2.drawContours(detected_img, valid, -1, (0, 255, 0), 2)
+        cv2.drawContours(detected_img, [largest], -1, (255, 255, 0), 2)
 
-        # Dibujar círculo de la placa
-        contours_plate, _ = cv2.findContours(plate_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(detected_img, contours_plate, -1, (255, 255, 0), 2)
-
-        # Contador
         cv2.rectangle(detected_img, (5, 5), (260, 45), (0, 0, 0), -1)
-        cv2.putText(detected_img, f"COLONIAS: {colonies_count}",
-                    (15, 35), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
+        # --- 7️⃣ Modo depuración opcional ---
         if debug:
-            st.image(gray, caption="Grayscale", use_container_width=True)
-            st.image(plate_mask, caption="Plate Mask", use_container_width=True)
-            st.image(gray_enhanced, caption="Enhanced Image", use_container_width=True)
+            st.image(gray, caption="Imagen gris", use_container_width=True)
+            st.image(plate_mask, caption="Máscara de placa", use_container_width=True)
+            st.image(enhanced, caption="Contraste mejorado", use_container_width=True)
+            st.image(opening, caption="Colonias segmentadas", use_container_width=True)
 
         return colonies_count, original_img, detected_img
+
 
 
 
