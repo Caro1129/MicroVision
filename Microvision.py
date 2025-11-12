@@ -972,65 +972,7 @@ class MultiStandardAnalyzer:
 
     
 
-    def count_colonies_opencv(self, original_img, debug=False):
-        import cv2
-        import numpy as np
-
-        try:
-            # --- 1) Redimensionar si es muy grande ---
-            max_dim = 1200
-            h, w = original_img.shape[:2]
-            if max(h, w) > max_dim:
-                scale = max_dim / max(h, w)
-                original_img = cv2.resize(original_img, (int(w * scale), int(h * scale)))
-
-            # --- 2) Convertir a gris ---
-            if len(original_img.shape) == 3:
-                gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-            else:
-                gray = original_img.copy()
-
-            # --- 3) Mejorar contraste y suavizar ---
-            gray = cv2.equalizeHist(gray)
-            blur = cv2.GaussianBlur(gray, (3, 3), 0)
-
-            # --- 4) Invertir si fondo oscuro ---
-            if np.mean(blur) < 127:
-                blur = cv2.bitwise_not(blur)
-
-            # --- 5) Binarización y limpieza ---
-            _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, np.ones((3,3), np.uint8), iterations=2)
-
-            # --- 6) Detectar blobs (colonias) ---
-            params = cv2.SimpleBlobDetector_Params()
-            params.filterByColor = True
-            params.blobColor = 255
-            params.filterByArea = True
-            params.minArea = 30
-            params.maxArea = 5000
-            detector = cv2.SimpleBlobDetector_create(params)
-            keypoints = detector.detect(opening)
-
-            colonies_count = len(keypoints)
-
-            # --- 7) Dibujar resultado final ---
-            detected_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-            for i, kp in enumerate(keypoints):
-                x, y = int(kp.pt[0]), int(kp.pt[1])
-                r = int(kp.size / 2)
-                cv2.circle(detected_img, (x, y), r, (0, 255, 0), 2)
-
-            text = f"Colonias: {colonies_count}"
-            cv2.rectangle(detected_img, (5, 5), (230, 40), (0, 0, 0), -1)
-            cv2.putText(detected_img, text, (15, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-            return colonies_count, original_img, detected_img
-
-        except Exception as e:
-            print(f"❌ Error en count_colonies_opencv: {e}")
-            return 0, original_img, original_img
+    
 
 
 
