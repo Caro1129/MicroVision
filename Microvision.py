@@ -1021,13 +1021,18 @@ class MultiStandardAnalyzer:
 
         # --- 3️⃣ Preprocesamiento ---
         masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(6, 6))
+        clahe = cv2.createCLAHE(clipLimit=6.0, tileGridSize=(4, 4))
         enhanced = clahe.apply(cv2.GaussianBlur(masked, (3, 3), 0))
 
         # --- 4️⃣ Binarización adaptativa ---
         meanv = np.mean(enhanced)
         proc = cv2.bitwise_not(enhanced) if meanv < 128 else enhanced
-        _, binary = cv2.threshold(proc, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        binary = cv2.adaptiveThreshold(
+            proc, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 51, 2
+        )
+
         kernel = np.ones((3, 3), np.uint8)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
@@ -1035,7 +1040,7 @@ class MultiStandardAnalyzer:
 
         # --- 5️⃣ Distance Transform + separación de colonias ---
         dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist, 0.5 * dist.max(), 255, 0)
+        _, sure_fg = cv2.threshold(dist, 0.35 * dist.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
         unknown = cv2.subtract(binary, sure_fg)
         _, markers = cv2.connectedComponents(sure_fg)
@@ -1056,8 +1061,8 @@ class MultiStandardAnalyzer:
             mask = np.uint8(markers == label) * 255
             area = cv2.countNonZero(mask)
             mean_intensity = cv2.mean(enhanced, mask=mask)[0]
-            if mean_intensity > 240 or mean_intensity < 50:
-                continue
+            if mean_intensity > 245 or mean_intensity < 30:
+                continue        
 
 
             if area < p['min_area'] or area > p['max_area']:
@@ -1070,7 +1075,7 @@ class MultiStandardAnalyzer:
             cnt = contours[0]
             (x, y), r = cv2.minEnclosingCircle(cnt)
             circularity = 4 * np.pi * cv2.contourArea(cnt) / (cv2.arcLength(cnt, True) ** 2 + 1e-5)
-            if circularity < 0.55:
+            if circularity < 0.35:
                 continue
 
             valid_centroids.append((int(x), int(y)))
