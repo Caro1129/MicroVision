@@ -972,18 +972,10 @@ class MultiStandardAnalyzer:
 
     
 
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
+    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False):
         import cv2
         import numpy as np
         import streamlit as st
-
-        # --- Parámetros de sensibilidad ---
-        params = {
-            'low': {'min_area': 40, 'max_area': 2500, 'blur': 7},
-            'medium': {'min_area': 60, 'max_area': 1800, 'blur': 9},
-            'high': {'min_area': 80, 'max_area': 1200, 'blur': 11}
-        }
-        p = params.get(sensitivity, params['medium'])
 
         # --- Preparar imagen ---
         if len(original_img.shape) == 2:
@@ -993,9 +985,9 @@ class MultiStandardAnalyzer:
             gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
             img_rgb = original_img.copy()
 
-        # --- 1️⃣ Detección robusta del área de la placa ---
-        blur = cv2.GaussianBlur(gray, (p['blur'], p['blur']), 0)
-        edges = cv2.Canny(blur, 40, 120)
+        # --- 1️⃣ Detección del área circular de la placa ---
+        blur = cv2.GaussianBlur(gray, (7, 7), 0)
+        edges = cv2.Canny(blur, 30, 100)
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         plate_mask = np.zeros_like(gray, dtype=np.uint8)
@@ -1003,43 +995,57 @@ class MultiStandardAnalyzer:
             largest = max(contours, key=cv2.contourArea)
             (x, y), radius = cv2.minEnclosingCircle(largest)
             if radius > 50:
-                cv2.circle(plate_mask, (int(x), int(y)), int(radius * 0.93), 255, -1)
+                cv2.circle(plate_mask, (int(x), int(y)), int(radius * 0.92), 255, -1)
             else:
                 plate_mask[:] = 255
         else:
             plate_mask[:] = 255
 
-        # --- 2️⃣ Aplicar máscara circular y eliminar borde brillante ---
+        # --- 2️⃣ Aplicar máscara circular ---
         masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        masked = cv2.GaussianBlur(masked, (5, 5), 0)
 
-        # --- 3️⃣ Ecualización y umbral adaptativo para aislar colonias ---
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        # --- 3️⃣ Mejorar contraste ---
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         enhanced = clahe.apply(masked)
-        thresh = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                    cv2.THRESH_BINARY_INV, 41, 2)
 
-        # --- 4️⃣ Operaciones morfológicas para eliminar ruido pequeño ---
+        # --- 4️⃣ Umbral inverso (colonias claras → blanco, fondo → negro) ---
+        _, otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+        # --- 5️⃣ Limpieza morfológica ---
         kernel = np.ones((3, 3), np.uint8)
-        opening = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel, iterations=2)
+        opening = cv2.morphologyEx(otsu, cv2.MORPH_OPEN, kernel, iterations=2)
+        sure_bg = cv2.dilate(opening, kernel, iterations=3)
 
-        # --- 5️⃣ Encontrar contornos de colonias ---
-        contours, _ = cv2.findContours(opening, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # --- 6️⃣ Distancia euclidiana para separar colonias pegadas ---
+        dist = cv2.distanceTransform(opening, cv2.DIST_L2, 5)
+        _, sure_fg = cv2.threshold(dist, 0.25 * dist.max(), 255, 0)
+        sure_fg = np.uint8(sure_fg)
+        unknown = cv2.subtract(sure_bg, sure_fg)
+
+        # --- 7️⃣ Etiquetado y watershed ---
+        num_markers, markers = cv2.connectedComponents(sure_fg)
+        markers = markers + 1
+        markers[unknown == 255] = 0
+        markers = cv2.watershed(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR), markers)
+
+        # --- 8️⃣ Extraer contornos finales ---
+        colonies_mask = np.uint8(markers > 1) * 255
+        contours, _ = cv2.findContours(colonies_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
         valid = []
         for c in contours:
             area = cv2.contourArea(c)
-            if p['min_area'] < area < p['max_area']:
+            if 30 < area < 3500:  # rango más amplio
                 M = cv2.moments(c)
-                if M["m00"] == 0:
-                    continue
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                if plate_mask[cy, cx] == 255:
-                    valid.append(c)
+                if M["m00"] != 0:
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
+                    if plate_mask[cy, cx] == 255:
+                        valid.append(c)
 
         colonies_count = len(valid)
 
-        # --- 6️⃣ Dibujar resultados ---
+        # --- 9️⃣ Dibujar resultados ---
         detected_img = img_rgb.copy()
         cv2.drawContours(detected_img, valid, -1, (0, 255, 0), 2)
         cv2.drawContours(detected_img, [largest], -1, (255, 255, 0), 2)
@@ -1048,14 +1054,15 @@ class MultiStandardAnalyzer:
         cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # --- 7️⃣ Modo depuración opcional ---
+        # --- 🔍 Visualización opcional ---
         if debug:
-            st.image(gray, caption="Imagen gris", use_container_width=True)
-            st.image(plate_mask, caption="Máscara de placa", use_container_width=True)
+            st.image(gray, caption="Original gris", use_container_width=True)
             st.image(enhanced, caption="Contraste mejorado", use_container_width=True)
-            st.image(opening, caption="Colonias segmentadas", use_container_width=True)
+            st.image(opening, caption="Binaria limpia", use_container_width=True)
+            st.image(colonies_mask, caption="Colonias segmentadas", use_container_width=True)
 
         return colonies_count, original_img, detected_img
+
 
 
 
