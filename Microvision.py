@@ -970,6 +970,12 @@ class MultiStandardAnalyzer:
 
 
 
+    
+
+
+
+
+
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
         Conteo optimizado con balance entre sensibilidad y precisión.
@@ -993,15 +999,15 @@ class MultiStandardAnalyzer:
                 'min_circularity': 0.25
             },
             'medium': {
-                'block_size': 41,          # REDUCIDO para detectar mejor
-                'C_value': 2,              # REDUCIDO
+                'block_size': 35,          # MÁS REDUCIDO para detectar mejor
+                'C_value': 1,              # MÁS REDUCIDO
                 'threshold_ratio': 0.10,
-                'min_area': 20,            # REDUCIDO para colonias pequeñas
-                'max_area': 800,           # MUY REDUCIDO - evita fusión
-                'morph_open': 2,           # AUMENTADO para limpiar ruido
-                'morph_close': 1,          # REDUCIDO - crítico para evitar fusión
-                'distance_threshold': 0.18, # MUY REDUCIDO - separa colonias cercanas
-                'min_circularity': 0.15
+                'min_area': 15,            # MÁS REDUCIDO
+                'max_area': 600,           # MÁS REDUCIDO
+                'morph_open': 2,           
+                'morph_close': 1,          
+                'distance_threshold': 0.15, # MÁS REDUCIDO
+                'min_circularity': 0.12     # MÁS PERMISIVO
             },
             'high': {
                 'block_size': 31,          # REDUCIDO
@@ -1044,39 +1050,55 @@ class MultiStandardAnalyzer:
         yellow_mask = cv2.inRange(hsv, lower_yellow, upper_yellow)
         not_yellow_mask = cv2.bitwise_not(yellow_mask)
         
-        # Detectar círculo de la placa
+        # MEJORADO: Detectar círculo de la placa con mejor robustez
         blurred = cv2.GaussianBlur(gray, (9, 9), 2)
-        clahe_detect = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clahe_detect = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         gray_contrast = clahe_detect.apply(blurred)
-        edges = cv2.Canny(gray_contrast, 30, 100)
+        edges = cv2.Canny(gray_contrast, 20, 80)
         
+        # Intentar múltiples detecciones con diferentes parámetros
         circles = cv2.HoughCircles(
             edges,
             cv2.HOUGH_GRADIENT,
-            dp=1.0,
-            minDist=min(h, w)//3,
-            param1=50,
-            param2=30,
-            minRadius=int(min(h, w)*0.20),
-            maxRadius=int(min(h, w)*0.52)
+            dp=1.2,
+            minDist=min(h, w)//2,
+            param1=40,
+            param2=25,
+            minRadius=int(min(h, w)*0.35),
+            maxRadius=int(min(h, w)*0.55)
         )
 
         plate_mask = np.zeros_like(gray, dtype=np.uint8)
         circle_detected = False
         
-        if circles is not None:
+        if circles is not None and len(circles[0]) > 0:
+            # Si hay múltiples círculos, elegir el más centrado y grande
             circles = np.uint16(np.around(circles))
-            x, y, r = circles[0, 0]
-            safe_radius = int(r * 0.92)
+            best_circle = None
+            best_score = -1
+            
+            for circle in circles[0]:
+                x, y, r = circle
+                # Puntaje basado en: tamaño + cercanía al centro
+                center_dist = np.sqrt((x - w/2)**2 + (y - h/2)**2)
+                score = r - center_dist * 0.1
+                if score > best_score:
+                    best_score = score
+                    best_circle = circle
+            
+            x, y, r = best_circle
+            # Usar radio más grande (95% en lugar de 92%)
+            safe_radius = int(r * 0.95)
             
             circle_mask = np.zeros_like(gray, dtype=np.uint8)
             cv2.circle(circle_mask, (x, y), safe_radius, 255, -1)
             plate_mask = cv2.bitwise_and(circle_mask, not_yellow_mask)
             circle_detected = True
-            print(f"✅ Petri detectada: centro=({x},{y}), radio={r}px")
+            print(f"✅ Petri detectada: centro=({x},{y}), radio={r}px (safe={safe_radius})")
         else:
-            kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
-            plate_mask = cv2.erode(not_yellow_mask, kernel_erode, iterations=2)
+            # Fallback mejorado usando contornos del fondo no-amarillo
+            kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (10, 10))
+            plate_mask = cv2.erode(not_yellow_mask, kernel_erode, iterations=1)
             print(f"⚠️ Círculo no detectado, usando detección por color")
         
         # Limpiar máscara
@@ -1096,15 +1118,20 @@ class MultiStandardAnalyzer:
         gray_processed = cv2.bitwise_and(gray, gray, mask=plate_mask)
 
         # --- 3) Pre-procesamiento MEJORADO ---
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        # Ecualización más fuerte para mejor contraste
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         gray_enhanced = clahe.apply(gray_processed)
         
         # CAMBIO: Suavizado más leve para preservar bordes
         gray_smooth = cv2.GaussianBlur(gray_enhanced, (3, 3), 0)
+        
+        # NUEVO: Realce de bordes para separar mejor las colonias
+        gray_sharp = cv2.addWeighted(gray_smooth, 1.5, cv2.GaussianBlur(gray_smooth, (5, 5), 0), -0.5, 0)
 
-        # --- 4) Umbralización ---
+        # --- 4) Umbralización MEJORADA ---
+        # Usar la imagen realzada
         thresh1 = cv2.adaptiveThreshold(
-            gray_smooth,
+            gray_sharp,
             255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV,
@@ -1112,10 +1139,17 @@ class MultiStandardAnalyzer:
             p['C_value']
         )
         
-        _, thresh2 = cv2.threshold(gray_smooth, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        _, thresh2 = cv2.threshold(gray_sharp, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # Combinar con OR
+        # NUEVO: Agregar umbral simple para capturar colonias oscuras
+        mean_intensity = cv2.mean(gray_processed, mask=plate_mask)[0]
+        thresh_value = int(mean_intensity * 0.85)
+        _, thresh3 = cv2.threshold(gray_processed, thresh_value, 255, cv2.THRESH_BINARY_INV)
+        thresh3 = cv2.bitwise_and(thresh3, plate_mask)
+        
+        # Combinar las tres umbralizaciones
         thresh = cv2.bitwise_or(thresh1, thresh2)
+        thresh = cv2.bitwise_or(thresh, thresh3)
         thresh = cv2.bitwise_and(thresh, plate_mask)
         
         print(f"🎯 Umbralización: block_size={p['block_size']}, C={p['C_value']}")
@@ -1301,42 +1335,57 @@ class MultiStandardAnalyzer:
 
         # --- 9) Debug ---
         if debug:
-            fig, axes = plt.subplots(3, 3, figsize=(18, 18))
+            fig, axes = plt.subplots(4, 3, figsize=(18, 24))
             
             axes[0, 0].imshow(img_rgb)
             axes[0, 0].set_title('1. Original')
             
             axes[0, 1].imshow(plate_mask, cmap='gray')
-            axes[0, 1].set_title('2. Plate Mask')
+            axes[0, 1].set_title(f'2. Plate Mask (área: {plate_area}px)')
             
             axes[0, 2].imshow(gray_enhanced, cmap='gray')
-            axes[0, 2].set_title('3. Enhanced')
+            axes[0, 2].set_title('3. Enhanced (CLAHE)')
             
-            axes[1, 0].imshow(thresh, cmap='gray')
-            axes[1, 0].set_title('4. Threshold + Separated')
+            axes[1, 0].imshow(gray_sharp, cmap='gray')
+            axes[1, 0].set_title('4. Sharpened')
+            
+            axes[1, 1].imshow(thresh, cmap='gray')
+            axes[1, 1].set_title('5. Threshold Combined')
+            
+            axes[1, 2].imshow(thresh_separated, cmap='gray')
+            axes[1, 2].set_title('6. After Separation')
             
             dist_norm = cv2.normalize(dist_transform, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-            axes[1, 1].imshow(dist_norm, cmap='jet')
-            axes[1, 1].set_title('5. Distance Transform')
+            axes[2, 0].imshow(dist_norm, cmap='jet')
+            axes[2, 0].set_title('7. Distance Transform')
             
-            axes[1, 2].imshow(sure_fg, cmap='gray')
-            axes[1, 2].set_title('6. Sure Foreground')
+            axes[2, 1].imshow(sure_fg, cmap='gray')
+            axes[2, 1].set_title(f'8. Sure Foreground (thresh={p["distance_threshold"]})')
             
             # Mostrar marcadores de watershed
             markers_display = markers.copy()
             markers_display[markers == -1] = 0
-            axes[2, 0].imshow(markers_display, cmap='nipy_spectral')
-            axes[2, 0].set_title('7. Watershed Markers')
+            axes[2, 2].imshow(markers_display, cmap='nipy_spectral')
+            axes[2, 2].set_title(f'9. Watershed ({num_labels} markers)')
             
             # Mostrar colonias filtradas
             filtered_mask = np.zeros_like(gray)
             for cm in valid_colonies:
                 filtered_mask = cv2.bitwise_or(filtered_mask, cm)
-            axes[2, 1].imshow(filtered_mask, cmap='gray')
-            axes[2, 1].set_title('8. Valid Colonies')
+            axes[3, 0].imshow(filtered_mask, cmap='gray')
+            axes[3, 0].set_title(f'10. Valid Colonies ({colonies_count})')
             
-            axes[2, 2].imshow(detected_img)
-            axes[2, 2].set_title(f'9. RESULT: {colonies_count}')
+            # Mostrar overlay de colonias en original
+            overlay_debug = img_rgb.copy()
+            for i, cm in enumerate(valid_colonies):
+                contours_debug, _ = cv2.findContours(cm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if len(contours_debug) > 0:
+                    cv2.drawContours(overlay_debug, contours_debug, -1, (0, 255, 0), 2)
+            axes[3, 1].imshow(overlay_debug)
+            axes[3, 1].set_title('11. Contours on Original')
+            
+            axes[3, 2].imshow(detected_img)
+            axes[3, 2].set_title(f'12. FINAL: {colonies_count} colonias')
             
             for ax in axes.flat:
                 ax.axis('off')
@@ -1348,7 +1397,6 @@ class MultiStandardAnalyzer:
         print(f"{'='*60}\n")
         
         return colonies_count, original_img, detected_img
-  
 
 
 
@@ -1356,7 +1404,7 @@ class MultiStandardAnalyzer:
 
 
 
-  
+
 
     def analyze_fungal_growth(self, original_img, segmented_img, microorganism=None):
         """
