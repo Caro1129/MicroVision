@@ -1028,39 +1028,39 @@ class MultiStandardAnalyzer:
         # --- PARÁMETROS OPTIMIZADOS POR SENSIBILIDAD ---
         params = {
             'low': {
-                'min_area': 40, 'max_area': 5000,
-                'min_circularity': 0.50,
-                'min_contrast': 12,
-                'min_std': 3.0, 'max_std': 30,
-                'erosion_iter': 2,
-                'dist_threshold': 0.28,
-                'min_solidity': 0.55,
-                'min_aspect': 0.4, 'max_aspect': 2.5,
-                'min_extent': 0.4
+                'min_area': 30, 'max_area': 5000,
+                'min_circularity': 0.40,
+                'min_contrast': 8,
+                'min_std': 1.5, 'max_std': 35,
+                'erosion_iter': 1,
+                'dist_threshold': 0.20,
+                'min_solidity': 0.45,
+                'min_aspect': 0.3, 'max_aspect': 3.5,
+                'min_extent': 0.3
             },
 
             'medium': {
-                'min_area': 35, 'max_area': 6000,
-                'min_circularity': 0.52,
-                'min_contrast': 10,
-                'min_std': 2.5, 'max_std': 28,
-                'erosion_iter': 2,
-                'dist_threshold': 0.25,
-                'min_solidity': 0.58,
-                'min_aspect': 0.4, 'max_aspect': 2.5,
-                'min_extent': 0.4
+                'min_area': 20, 'max_area': 6000,
+                'min_circularity': 0.35,
+                'min_contrast': 6,
+                'min_std': 1.2, 'max_std': 38,
+                'erosion_iter': 1,
+                'dist_threshold': 0.18,
+                'min_solidity': 0.42,
+                'min_aspect': 0.3, 'max_aspect': 3.5,
+                'min_extent': 0.28
             },
 
             'high': {
-                'min_area': 25, 'max_area': 7000,
-                'min_circularity': 0.48,
-                'min_contrast': 8,
-                'min_std': 2.0, 'max_std': 25,
+                'min_area': 15, 'max_area': 7000,
+                'min_circularity': 0.30,
+                'min_contrast': 5,
+                'min_std': 1.0, 'max_std': 40,
                 'erosion_iter': 1,
-                'dist_threshold': 0.22,
-                'min_solidity': 0.52,
-                'min_aspect': 0.35, 'max_aspect': 3.0,
-                'min_extent': 0.35
+                'dist_threshold': 0.15,
+                'min_solidity': 0.38,
+                'min_aspect': 0.25, 'max_aspect': 4.0,
+                'min_extent': 0.25
             }
         }
 
@@ -1132,20 +1132,26 @@ class MultiStandardAnalyzer:
         if meanv < 128:
             enhanced = cv2.bitwise_not(enhanced)
 
-        # Usar solo métodos adaptativos con ventana más grande
+        # Método 1: Adaptativo Gaussiano
         binary1 = cv2.adaptiveThreshold(
             enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 71, 3
+            cv2.THRESH_BINARY_INV, 51, 2
         )
 
-        # Método complementario con Otsu local
+        # Método 2: Adaptativo Mean
+        binary2 = cv2.adaptiveThreshold(
+            enhanced, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV, 51, 2
+        )
+
+        # Método 3: Otsu
         blur_local = cv2.GaussianBlur(enhanced, (5, 5), 0)
-        _, binary2 = cv2.threshold(
+        _, binary3 = cv2.threshold(
             blur_local, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
 
-        # Combinar solo si ambos están de acuerdo
-        binary = cv2.bitwise_and(binary1, binary2)
+        # Combinar: unión de los 3 métodos (más permisivo)
+        binary = cv2.bitwise_or(binary1, cv2.bitwise_or(binary2, binary3))
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
         # --- 5️⃣ Limpieza morfológica ---
@@ -1204,9 +1210,9 @@ class MultiStandardAnalyzer:
                 rejected_info.append(f"M{marker}: intensidad {mean_int:.0f}")
                 continue
             
-            # 🆕 Filtro 3: CONTRASTE LOCAL (clave para evitar falsos positivos)
+            # 🆕 Filtro 3: CONTRASTE LOCAL (ajustado más permisivo)
             x, y, w_box, h_box = cv2.boundingRect(cnt)
-            margin = 15
+            margin = 20  # Aumentado de 15 a 20
             y1 = max(0, y - margin)
             y2 = min(h, y + h_box + margin)
             x1 = max(0, x - margin)
@@ -1217,9 +1223,15 @@ class MultiStandardAnalyzer:
             cnt_shifted = cnt - [x1, y1]
             cv2.drawContours(mask_roi, [cnt_shifted], -1, 255, -1)
             
-            mean_colony = cv2.mean(enhanced, mask=mask)[0]
-            mean_background = cv2.mean(roi_around, mask=cv2.bitwise_not(mask_roi))[0]
-            contrast = abs(mean_colony - mean_background)
+            # Verificar que hay suficiente background para comparar
+            bg_pixels = cv2.countNonZero(cv2.bitwise_not(mask_roi))
+            if bg_pixels < 10:
+                # Si no hay suficiente background, aceptar la colonia
+                contrast = p['min_contrast']
+            else:
+                mean_colony = cv2.mean(enhanced, mask=mask)[0]
+                mean_background = cv2.mean(roi_around, mask=cv2.bitwise_not(mask_roi))[0]
+                contrast = abs(mean_colony - mean_background)
             
             if contrast < p['min_contrast']:
                 rejected_info.append(f"M{marker}: contraste {contrast:.1f}")
@@ -1348,6 +1360,11 @@ class MultiStandardAnalyzer:
         print(f"{'='*60}\n")
 
         return colonies_count, original_img, detected_img
+
+
+
+
+
 
 
     
