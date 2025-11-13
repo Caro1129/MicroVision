@@ -971,14 +971,8 @@ class MultiStandardAnalyzer:
 
 
     
+    
     def count_colonies_opencv(self, original_img, debug=False, sensitivity='medium'):
-        """
-        Conteo de colonias azules reales:
-        - Detecta solo azul (HSV)
-        - Filtra ruido
-        - Separa colonias pegadas (watershed)
-        - Dibuja en azul
-        """
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
@@ -988,8 +982,8 @@ class MultiStandardAnalyzer:
         try:
             if original_img is None or not isinstance(original_img, np.ndarray):
                 raise ValueError("original_img debe ser un np.ndarray válido")
-            
-            # --- Parametros según sensibilidad ---
+
+            # --- Parametros ---
             params = {
                 'low': {'min_area': 45, 'erosion_iter': 2, 'dist_thresh':0.22},
                 'medium': {'min_area': 30, 'erosion_iter': 2, 'dist_thresh':0.19},
@@ -997,10 +991,13 @@ class MultiStandardAnalyzer:
             }
             p = params.get(sensitivity, params['medium'])
 
-            img_rgb = original_img.copy()
-            h, w = img_rgb.shape[:2]
+            # --- Asegurar que la imagen es RGB ---
+            if len(original_img.shape) == 2:
+                img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2RGB)
+            else:
+                img_rgb = original_img.copy()
 
-            # --- Convertir a HSV para detectar azul ---
+            # --- Convertir a HSV ---
             hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
             lower_blue = np.array([100, 80, 50])
             upper_blue = np.array([140, 255, 255])
@@ -1011,6 +1008,11 @@ class MultiStandardAnalyzer:
             mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_OPEN, kernel, iterations=2)
             mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_CLOSE, kernel, iterations=1)
             mask_eroded = cv2.erode(mask_blue, kernel, iterations=p['erosion_iter'])
+
+            # --- Validar que hay píxeles antes de distance transform ---
+            if cv2.countNonZero(mask_eroded) == 0:
+                print("⚠️ No se detectaron colonias azules")
+                return 0, original_img, original_img
 
             # --- Distance Transform + Watershed ---
             dist = cv2.distanceTransform(mask_eroded, cv2.DIST_L2, 5)
@@ -1051,20 +1053,15 @@ class MultiStandardAnalyzer:
                 for ax in axes: ax.axis('off')
                 plt.tight_layout()
                 st.pyplot(fig)
-                plt.close()
+                plt.close(fig)
 
             print(f"🔬 Colonias azules reales: {colonies_count}")
             return colonies_count, original_img, detected_img
 
         except Exception as e:
-            print("❌ Error count_blue_colonies:")
+            print("❌ Error count_colonies_opencv:")
             traceback.print_exc()
             return 0, original_img, original_img
-
-
-
-
-
 
 
 
