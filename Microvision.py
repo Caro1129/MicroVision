@@ -971,94 +971,103 @@ class MultiStandardAnalyzer:
 
 
     
-    def count_colonies_opencv_blue(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
+    def count_colonies_opencv_streamlit(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
-        Conteo de colonias bacterianas reales
-        - Dibuja todas las colonias válidas en azul
-        - Descarta falsos positivos
-        - Separa colonias pegadas
+        Conteo de colonias para Streamlit con manejo de errores.
+        - Solo colonias reales
+        - Colonias separadas
+        - Colonias dibujadas en azul
         """
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
         import streamlit as st
 
-        # --- Parámetros según sensibilidad ---
-        params = {
-            'low': {'min_area': 45, 'max_area': 4000, 'erosion_iter': 2, 'dist_threshold': 0.22},
-            'medium': {'min_area': 30, 'max_area': 5500, 'erosion_iter': 2, 'dist_threshold': 0.19},
-            'high': {'min_area': 20, 'max_area': 7000, 'erosion_iter': 2, 'dist_threshold': 0.17}
-        }
-        p = params.get(sensitivity, params['medium'])
+        try:
+            # --- Parámetros según sensibilidad ---
+            params = {
+                'low': {'min_area': 45, 'max_area': 4000, 'erosion_iter': 2, 'dist_threshold': 0.22},
+                'medium': {'min_area': 30, 'max_area': 5500, 'erosion_iter': 2, 'dist_threshold': 0.19},
+                'high': {'min_area': 20, 'max_area': 7000, 'erosion_iter': 2, 'dist_threshold': 0.17}
+            }
+            p = params.get(sensitivity, params['medium'])
 
-        # --- Preparar imagen ---
-        if len(original_img.shape) == 2:
-            gray = original_img
-            img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2BGR)
-        else:
-            gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-            img_rgb = original_img.copy()
+            # --- Preparar imagen ---
+            if original_img is None:
+                raise ValueError("original_img es None")
+            if len(original_img.shape) == 2:
+                gray = original_img
+                img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2BGR)
+            else:
+                gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
+                img_rgb = original_img.copy()
 
-        # --- Preprocesamiento ---
-        blur = cv2.GaussianBlur(gray, (7,7), 0)
-        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(blur)
+            # --- Preprocesamiento ---
+            blur = cv2.GaussianBlur(gray, (7,7), 0)
+            clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8,8))
+            enhanced = clahe.apply(blur)
 
-        meanv = np.mean(enhanced)
-        if meanv < 128:
-            enhanced = cv2.bitwise_not(enhanced)
+            meanv = np.mean(enhanced)
+            if meanv < 128:
+                enhanced = cv2.bitwise_not(enhanced)
 
-        # --- Binarización ---
-        binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                    cv2.THRESH_BINARY_INV, 51, 2)
-        kernel = np.ones((2,2), np.uint8)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-        binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
+            # --- Binarización ---
+            binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                        cv2.THRESH_BINARY_INV, 51, 2)
+            kernel = np.ones((2,2), np.uint8)
+            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
+            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+            binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
 
-        # --- Distance Transform + Watershed ---
-        dist = cv2.distanceTransform(binary_eroded, cv2.DIST_L2, 5)
-        _, dt_thresh = cv2.threshold(dist, p['dist_threshold']*dist.max(), 255, 0)
-        dt_thresh = np.uint8(dt_thresh)
-        num_labels, labels = cv2.connectedComponents(dt_thresh)
+            # --- Distance Transform + Watershed ---
+            dist = cv2.distanceTransform(binary_eroded, cv2.DIST_L2, 5)
+            _, dt_thresh = cv2.threshold(dist, p['dist_threshold']*dist.max(), 255, 0)
+            dt_thresh = np.uint8(dt_thresh)
+            num_labels, labels = cv2.connectedComponents(dt_thresh)
 
-        colonies = []
-        for i in range(1, num_labels):
-            mask = np.uint8(labels==i)*255
-            if cv2.countNonZero(mask) < p['min_area']:
-                continue
-            contours,_ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                cnt = max(contours, key=cv2.contourArea)
-                M = cv2.moments(cnt)
-                if M["m00"] > 0:
-                    cx = int(M["m10"]/M["m00"])
-                    cy = int(M["m01"]/M["m00"])
-                    colonies.append({'centroid': (cx, cy), 'contour': cnt})
+            colonies = []
+            for i in range(1, num_labels):
+                mask = np.uint8(labels==i)*255
+                if cv2.countNonZero(mask) < p['min_area']:
+                    continue
+                contours,_ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    cnt = max(contours, key=cv2.contourArea)
+                    M = cv2.moments(cnt)
+                    if M["m00"] > 0:
+                        cx = int(M["m10"]/M["m00"])
+                        cy = int(M["m01"]/M["m00"])
+                        colonies.append({'centroid': (cx, cy), 'contour': cnt})
 
-        colonies_count = len(colonies)
+            colonies_count = len(colonies)
 
-        # --- Dibujar colonias en azul ---
-        detected_img = img_rgb.copy()
-        for colony in colonies:
-            cx, cy = colony['centroid']
-            cv2.drawContours(detected_img, [colony['contour']], -1, (255,0,0), 2)  # azul
-            cv2.circle(detected_img, (cx, cy), 4, (255,0,0), -1)
+            # --- Dibujar colonias en azul ---
+            detected_img = img_rgb.copy()
+            for colony in colonies:
+                cx, cy = colony['centroid']
+                cv2.drawContours(detected_img, [colony['contour']], -1, (255,0,0), 2)  # azul
+                cv2.circle(detected_img, (cx, cy), 4, (255,0,0), -1)
 
-        print(f"🔬 Colonias reales detectadas: {colonies_count}")
+            # --- Debug visual ---
+            if debug:
+                fig, axes = plt.subplots(1,2,figsize=(12,6))
+                axes[0].imshow(gray, cmap='gray'); axes[0].set_title("Original")
+                axes[1].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
+                axes[1].set_title(f"Colonias reales (azul) - Total: {colonies_count}")
+                for ax in axes: ax.axis('off')
+                plt.tight_layout()
+                st.pyplot(fig)
+                plt.close()
 
-        # --- Debug visual ---
-        if debug:
-            fig, axes = plt.subplots(1,2,figsize=(12,6))
-            axes[0].imshow(gray, cmap='gray'); axes[0].set_title("Original")
-            axes[1].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
-            axes[1].set_title(f"Colonias reales (azul) - Total: {colonies_count}")
-            for ax in axes: ax.axis('off')
-            plt.tight_layout()
-            st.pyplot(fig)
-            plt.close()
+            print(f"🔬 Colonias reales detectadas: {colonies_count}")
 
-        return colonies_count, original_img, detected_img
+            return colonies_count, original_img, detected_img
+
+        except Exception as e:
+            print("❌ Error en count_colonies_opencv_streamlit:", e)
+            # Devolver la imagen original en caso de fallo
+            return 0, original_img, original_img
+
 
 
 
