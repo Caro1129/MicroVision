@@ -990,9 +990,10 @@ class MultiStandardAnalyzer:
                 'min_circularity': 0.45,
                 'intensity_range': (30, 235),
                 'min_contrast': 8,
-                'min_std': 3,  # Reducido
-                'erosion_iter': 1,
-                'dist_threshold': 0.25
+                'min_std': 3,
+                'erosion_iter': 2,  # Aumentado para mejor separación
+                'dist_threshold': 0.20,
+                'multi_colony_factor': 1.8  # Umbral para detectar colonias múltiples
             },
             'medium': {
                 'blur': 7, 
@@ -1002,8 +1003,9 @@ class MultiStandardAnalyzer:
                 'intensity_range': (25, 240),
                 'min_contrast': 6,
                 'min_std': 2.5,
-                'erosion_iter': 1,
-                'dist_threshold': 0.22
+                'erosion_iter': 2,
+                'dist_threshold': 0.18,
+                'multi_colony_factor': 1.7
             },
             'high': {
                 'blur': 9, 
@@ -1013,8 +1015,9 @@ class MultiStandardAnalyzer:
                 'intensity_range': (20, 245),
                 'min_contrast': 5,
                 'min_std': 2,
-                'erosion_iter': 1,
-                'dist_threshold': 0.20
+                'erosion_iter': 2,
+                'dist_threshold': 0.15,
+                'multi_colony_factor': 1.6
             }
         }
         p = params.get(sensitivity, params['medium'])
@@ -1039,7 +1042,7 @@ class MultiStandardAnalyzer:
             (x, y), radius = cv2.minEnclosingCircle(largest)
             if radius > 50:
                 center = (int(x), int(y))
-                cv2.circle(plate_mask, center, int(radius * 0.90), 255, -1)  # Más restrictivo
+                cv2.circle(plate_mask, center, int(radius * 0.95), 255, -1)  # Ampliado de 0.90 a 0.95
             else:
                 plate_mask[:] = 255
         else:
@@ -1081,8 +1084,8 @@ class MultiStandardAnalyzer:
         # Cierre para unir fragmentos
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
         
-        # Para separar colonias pegadas: erosión + dilatación selectiva
-        binary_eroded = cv2.erode(binary, kernel, iterations=2)  # Aumentado a 2
+        # Para separar colonias pegadas: erosión AGRESIVA
+        binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
         
         # --- 6️⃣ Distance Transform MEJORADO ---
         dist = cv2.distanceTransform(binary_eroded, cv2.DIST_L2, 5)
@@ -1090,13 +1093,14 @@ class MultiStandardAnalyzer:
         # Suavizar distance transform para evitar ruido
         dist_smooth = cv2.GaussianBlur(dist, (5, 5), 0)
         
-        # Umbral adaptativo más bajo para detectar más centros
+        # Umbral MÁS BAJO para detectar más centros de colonias pegadas
         threshold_val = p['dist_threshold'] * dist_smooth.max()
         _, sure_fg = cv2.threshold(dist_smooth, threshold_val, 255, 0)
         sure_fg = np.uint8(sure_fg)
         
-        # Dilatar ligeramente los centros para unir fragmentos muy cercanos
-        sure_fg = cv2.dilate(sure_fg, kernel, iterations=1)
+        # Dilatar MUY POCO los centros 
+        kernel_tiny = np.ones((2, 2), np.uint8)
+        sure_fg = cv2.dilate(sure_fg, kernel_tiny, iterations=1)
         
         # --- 7️⃣ Análisis de componentes conectados ---
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(sure_fg, connectivity=8)
@@ -1208,10 +1212,10 @@ class MultiStandardAnalyzer:
                 rejected_reasons.append(f"Label {label}: Compacidad baja ({compactness:.2f})")
                 continue
             
-            # ✅ Filtro 7: Posición (no en bordes extremos)
+            # ✅ Filtro 7: Posición (no en bordes EXTREMOS solamente)
             if center and radius:
                 dist_to_center = np.sqrt((x - center[0])**2 + (y - center[1])**2)
-                if dist_to_center > radius * 0.88:
+                if dist_to_center > radius * 0.93:  # Ampliado de 0.88 a 0.93
                     rejected_reasons.append(f"Label {label}: Muy cerca del borde")
                     continue
             
@@ -1227,10 +1231,11 @@ class MultiStandardAnalyzer:
             # ⭐ NUEVO: Detectar si es una colonia grande que contiene múltiples colonias
             avg_colony_area = (p['min_area'] + p['max_area']) / 2
             
-            if area > avg_colony_area * 2.2 and circularity < 0.7:
+            # Umbral MÁS BAJO para activar subdivisión
+            if area > avg_colony_area * p['multi_colony_factor'] and circularity < 0.75:
                 # Calcular cuántas colonias podría contener
                 estimated_count = int(area / avg_colony_area)
-                estimated_count = max(2, min(estimated_count, 5))  # Entre 2 y 5
+                estimated_count = max(2, min(estimated_count, 6))  # Entre 2 y 6
                 
                 # Analizar concavidades
                 hull_pts = cv2.convexHull(cnt, returnPoints=False)
@@ -1238,8 +1243,17 @@ class MultiStandardAnalyzer:
                     try:
                         defects = cv2.convexityDefects(cnt, hull_pts)
                         
-                        if defects is not None and len(defects) >= 2:
-                            # Tiene concavidades significativas -> probablemente múltiples colonias
+                        # Contar concavidades significativas
+                        significant_defects = 0
+                        if defects is not None:
+                            for i in range(defects.shape[0]):
+                                s, e, f, d = defects[i, 0]
+                                # Solo contar si la profundidad es significativa
+                                if d > 200:  # Reducido para ser más sensible
+                                    significant_defects += 1
+                        
+                        # Si tiene al menos 1 concavidad significativa O es muy grande
+                        if significant_defects >= 1 or area > avg_colony_area * (p['multi_colony_factor'] + 0.5):
                             M = cv2.moments(cnt)
                             if M["m00"] != 0:
                                 cx_main = int(M["m10"] / M["m00"])
@@ -1249,11 +1263,15 @@ class MultiStandardAnalyzer:
                                 local_mask = mask_original[y_min:y_max, x_min:x_max].copy()
                                 
                                 if local_mask.shape[0] > 10 and local_mask.shape[1] > 10:
-                                    local_dist = cv2.distanceTransform(local_mask, cv2.DIST_L2, 5)
+                                    # Erosionar un poco la máscara local
+                                    local_mask_eroded = cv2.erode(local_mask, kernel, iterations=2)
+                                    
+                                    local_dist = cv2.distanceTransform(local_mask_eroded, cv2.DIST_L2, 5)
                                     local_dist = cv2.GaussianBlur(local_dist, (5, 5), 0)
                                     
                                     if local_dist.max() > 0:
-                                        _, local_peaks = cv2.threshold(local_dist, 0.15 * local_dist.max(), 255, 0)
+                                        # Umbral MUY BAJO para detectar más centros
+                                        _, local_peaks = cv2.threshold(local_dist, 0.12 * local_dist.max(), 255, 0)
                                         local_peaks = np.uint8(local_peaks)
                                         
                                         n_components, local_labels = cv2.connectedComponents(local_peaks)
@@ -1269,7 +1287,7 @@ class MultiStandardAnalyzer:
                                                 valid_centroids.append((cx_local, cy_local))
                                                 added += 1
                                         
-                                        if added > 0:
+                                        if added >= 2:  # Solo si detectó al menos 2 colonias
                                             valid_contours.append(cnt)
                                             continue
                     except:
@@ -1288,7 +1306,7 @@ class MultiStandardAnalyzer:
         # --- 🎨 Dibujar resultados ---
         detected_img = img_rgb.copy()
         if center:
-            cv2.circle(detected_img, center, int(radius * 0.90), (255, 255, 0), 2)
+            cv2.circle(detected_img, center, int(radius * 0.95), (255, 255, 0), 2)  # Actualizado
 
         for i, (cx, cy) in enumerate(valid_centroids):
             cv2.circle(detected_img, (cx, cy), 8, (0, 255, 0), 2)
