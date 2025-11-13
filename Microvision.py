@@ -1028,21 +1028,35 @@ class MultiStandardAnalyzer:
         # --- PARÁMETROS OPTIMIZADOS POR SENSIBILIDAD ---
         params = {
             'low': {
-                'min_area': 45, 'max_area': 4000, 'min_circularity': 0.40,
-                'min_contrast': 8, 'min_std': 2.8, 'max_std': 50,
-                'erosion_iter': 2, 'dist_threshold': 0.22, 'min_solidity': 0.45
+                'min_area': 35, 'max_area': 4500,
+                'min_circularity': 0.55,
+                'min_contrast': 10,
+                'min_std': 3.0, 'max_std': 35,
+                'erosion_iter': 1,
+                'dist_threshold': 0.25,
+                'min_solidity': 0.60
             },
             'medium': {
-                'min_area': 30, 'max_area': 5500, 'min_circularity': 0.35,
-                'min_contrast': 6, 'min_std': 2.3, 'max_std': 55,
-                'erosion_iter': 2, 'dist_threshold': 0.19, 'min_solidity': 0.42
+                'min_area': 22, 'max_area': 6000,
+                'min_circularity': 0.58,
+                'min_contrast': 12,
+                'min_std': 2.5, 'max_std': 28,
+                'erosion_iter': 1,
+                'dist_threshold': 0.23,
+                'min_solidity': 0.62
             },
             'high': {
-                'min_area': 20, 'max_area': 7000, 'min_circularity': 0.30,
-                'min_contrast': 4, 'min_std': 1.8, 'max_std': 60,
-                'erosion_iter': 2, 'dist_threshold': 0.17, 'min_solidity': 0.38
+                'min_area': 15, 'max_area': 7500,
+                'min_circularity': 0.55,
+                'min_contrast': 10,
+                'min_std': 2.2, 'max_std': 30,
+                'erosion_iter': 1,
+                'dist_threshold': 0.21,
+                'min_solidity': 0.60
             }
+
         }
+
         p = params.get(sensitivity, params['medium'])
 
         # --- 1️⃣ Preparar imagen ---
