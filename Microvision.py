@@ -971,7 +971,7 @@ class MultiStandardAnalyzer:
 
 
     
-    def count_colonies_opencv_streamlit(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
+    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
         Conteo de colonias para Streamlit con manejo de errores.
         - Solo colonias reales
