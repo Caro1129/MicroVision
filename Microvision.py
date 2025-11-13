@@ -973,257 +973,181 @@ class MultiStandardAnalyzer:
     
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
-        Contador de colonias bacterianas OPTIMIZADO v2
-        Enfoque: Mejor binarización + watershed robusto + filtrado inteligente
-        Detecta también colonias pegadas.
+        Contador de colonias bacterianas v3
+        - Cuenta colonias válidas
+        - Detecta y separa colonias pegadas usando watershed local
+        - Evita falsos positivos
         """
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
         import streamlit as st
 
-        # --- PARÁMETROS OPTIMIZADOS POR SENSIBILIDAD ---
+        # --- Parámetros según sensibilidad ---
         params = {
-            'low': {
-                'min_area': 45, 'max_area': 4000, 'min_circularity': 0.40, 'min_contrast': 8,
-                'min_std': 2.8, 'max_std': 50, 'erosion_iter': 2, 'dist_threshold': 0.22, 'min_solidity': 0.45
-            },
-            'medium': {
-                'min_area': 30, 'max_area': 5500, 'min_circularity': 0.35, 'min_contrast': 6,
-                'min_std': 2.3, 'max_std': 55, 'erosion_iter': 2, 'dist_threshold': 0.19, 'min_solidity': 0.42
-            },
-            'high': {
-                'min_area': 20, 'max_area': 7000, 'min_circularity': 0.30, 'min_contrast': 4,
-                'min_std': 1.8, 'max_std': 60, 'erosion_iter': 2, 'dist_threshold': 0.17, 'min_solidity': 0.38
-            }
+            'low': {'min_area': 45, 'max_area': 4000, 'min_circularity': 0.4,
+                    'min_std': 2.8, 'max_std': 50, 'erosion_iter': 2,
+                    'dist_threshold': 0.22, 'min_solidity': 0.45},
+            'medium': {'min_area': 30, 'max_area': 5500, 'min_circularity': 0.35,
+                    'min_std': 2.3, 'max_std': 55, 'erosion_iter': 2,
+                    'dist_threshold': 0.19, 'min_solidity': 0.42},
+            'high': {'min_area': 20, 'max_area': 7000, 'min_circularity': 0.3,
+                    'min_std': 1.8, 'max_std': 60, 'erosion_iter': 2,
+                    'dist_threshold': 0.17, 'min_solidity': 0.38}
         }
         p = params.get(sensitivity, params['medium'])
 
-        # --- 1️⃣ Preparar imagen ---
+        # --- Preparar imagen ---
         if len(original_img.shape) == 2:
             gray = original_img
             img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2BGR)
         else:
             gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
             img_rgb = original_img.copy()
-
         h, w = gray.shape
 
-        # --- 2️⃣ Detección robusta de la placa ---
-        blur = cv2.GaussianBlur(gray, (7, 7), 0)
-        edges = cv2.Canny(blur, 30, 100)
-        
-        circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1, minDist=100,
-                                param1=50, param2=30, minRadius=int(min(h,w)*0.3), 
-                                maxRadius=int(min(h,w)*0.55))
-        
+        # --- Detección de placa ---
+        blur = cv2.GaussianBlur(gray, (7,7),0)
+        edges = cv2.Canny(blur,30,100)
         plate_mask = np.zeros_like(gray, dtype=np.uint8)
         center, radius = None, None
-        
+
+        # Intentar HoughCircles
+        circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1, minDist=100,
+                                param1=50, param2=30,
+                                minRadius=int(min(h,w)*0.3),
+                                maxRadius=int(min(h,w)*0.55))
         if circles is not None:
             circles = np.uint16(np.around(circles))
             x, y, r = circles[0][0]
-            center = (int(x), int(y))
-            radius = int(r)
-            cv2.circle(plate_mask, center, int(radius * 0.94), 255, -1)
+            center = (int(x), int(y)); radius = int(r)
+            cv2.circle(plate_mask, center, int(radius*0.94), 255, -1)
         else:
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
                 largest = max(contours, key=cv2.contourArea)
                 (x, y), r = cv2.minEnclosingCircle(largest)
                 if r > 50:
-                    center = (int(x), int(y))
-                    radius = int(r)
-                    cv2.circle(plate_mask, center, int(radius * 0.94), 255, -1)
+                    center = (int(x), int(y)); radius = int(r)
+                    cv2.circle(plate_mask, center, int(radius*0.94), 255, -1)
                 else:
                     plate_mask[:] = 255
             else:
                 plate_mask[:] = 255
 
-        # --- 3️⃣ Preprocesamiento ---
+        # --- Preprocesamiento ---
         masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
         denoised = cv2.bilateralFilter(masked, 7, 50, 50)
-        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8,8))
         enhanced = clahe.apply(denoised)
 
-        # --- 4️⃣ Binarización TRIPLE ---
-        meanv = np.mean(enhanced[plate_mask > 0])
-        if meanv < 128:
-            enhanced = cv2.bitwise_not(enhanced)
-        
-        binary1 = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                        cv2.THRESH_BINARY_INV, 51, 2)
-        binary2 = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-                                        cv2.THRESH_BINARY_INV, 51, 2)
-        _, binary3 = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        
-        binary_sum = (binary1.astype(float) + binary2.astype(float) + binary3.astype(float)) / 255.0
-        binary = ((binary_sum >= 2.0) * 255).astype(np.uint8)
-        binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
+        # --- Binarización ---
+        meanv = np.mean(enhanced[plate_mask>0])
+        if meanv < 128: enhanced = cv2.bitwise_not(enhanced)
+        binary1 = cv2.adaptiveThreshold(enhanced,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                        cv2.THRESH_BINARY_INV,51,2)
+        binary2 = cv2.adaptiveThreshold(enhanced,255,cv2.ADAPTIVE_THRESH_MEAN_C,
+                                        cv2.THRESH_BINARY_INV,51,2)
+        _, binary3 = cv2.threshold(enhanced,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
+        binary = ((binary1.astype(float)+binary2.astype(float)+binary3.astype(float))/255 >=2).astype(np.uint8)*255
+        binary = cv2.bitwise_and(binary,binary,mask=plate_mask)
 
-        # --- 5️⃣ Limpieza morfológica ---
-        kernel = np.ones((2, 2), np.uint8)
+        # --- Morfología ---
+        kernel = np.ones((2,2), np.uint8)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-
-        # --- 6️⃣ Erosión ---
         binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
 
-        # --- 7️⃣ Distance Transform + Watershed ---
-        dist_transform = cv2.distanceTransform(binary_eroded, cv2.DIST_L2, 5)
-        dist_transform = cv2.GaussianBlur(dist_transform, (5, 5), 0)
-        _, sure_fg = cv2.threshold(dist_transform, p['dist_threshold'] * dist_transform.max(), 255, 0)
+        # --- Distance Transform global + Watershed ---
+        dist_transform = cv2.distanceTransform(binary_eroded, cv2.DIST_L2,5)
+        dist_transform = cv2.GaussianBlur(dist_transform,(5,5),0)
+        _, sure_fg = cv2.threshold(dist_transform, p['dist_threshold']*dist_transform.max(),255,0)
         sure_fg = np.uint8(sure_fg)
+        num_labels, labels_im, stats, centroids = cv2.connectedComponentsWithStats(sure_fg,8)
 
-        num_labels, labels_im, stats, centroids = cv2.connectedComponentsWithStats(sure_fg, connectivity=8)
-        markers = np.zeros_like(gray, dtype=np.int32)
-        for i in range(1, num_labels):
-            markers[labels_im == i] = i
-        sure_bg = cv2.dilate(binary, kernel, iterations=3)
-        unknown = cv2.subtract(sure_bg, sure_fg)
-        markers[unknown == 255] = 0
+        markers = np.zeros_like(gray,dtype=np.int32)
+        for i in range(1,num_labels): markers[labels_im==i]=i
+        sure_bg = cv2.dilate(binary,kernel,iterations=3)
+        unknown = cv2.subtract(sure_bg,sure_fg)
+        markers[unknown==255]=0
         markers = markers + 1
-        markers[unknown == 255] = 0
+        markers[unknown==255]=0
         color_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
-        cv2.watershed(color_img, markers)
+        cv2.watershed(color_img,markers)
 
-        # --- 8️⃣ Filtrado inteligente ---
-        valid_colonies = []
-        rejected_info = []
-        unique_markers = np.unique(markers)
-        for marker in unique_markers:
-            if marker <= 1: continue
-            mask = np.uint8(markers == marker) * 255
-            if cv2.countNonZero(mask) < 5: continue
-            contours_region, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if not contours_region: continue
-            cnt = max(contours_region, key=cv2.contourArea)
+        # --- Filtrado de colonias válidas ---
+        valid_colonies=[]
+        for marker in np.unique(markers):
+            if marker<=1: continue
+            mask = np.uint8(markers==marker)*255
+            if cv2.countNonZero(mask)<10: continue
+            contours,_ = cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+            if not contours: continue
+            cnt = max(contours,key=cv2.contourArea)
             area = cv2.contourArea(cnt)
-            if area < p['min_area'] or area > p['max_area']:
-                rejected_info.append(f"M{marker}: área {area:.0f}"); continue
-            mean_int = cv2.mean(enhanced, mask=mask)[0]
-            if mean_int < 20 or mean_int > 250:
-                rejected_info.append(f"M{marker}: intensidad {mean_int:.0f}"); continue
-            pixels = enhanced[mask > 0]
-            if len(pixels) > 3:
-                std_int = np.std(pixels)
-                if std_int < p['min_std'] or std_int > p['max_std']:
-                    rejected_info.append(f"M{marker}: std {std_int:.1f}"); continue
-            y_coords, x_coords = np.where(mask > 0)
-            if len(y_coords) == 0: continue
-            y_min = max(0, y_coords.min() - 10); y_max = min(h, y_coords.max() + 10)
-            x_min = max(0, x_coords.min() - 10); x_max = min(w, x_coords.max() + 10)
-            neighborhood_mask = np.zeros_like(mask)
-            neighborhood_mask[y_min:y_max, x_min:x_max] = 255
-            ring_mask = cv2.subtract(neighborhood_mask, mask)
-            if cv2.countNonZero(ring_mask) > 10:
-                mean_neighbor = cv2.mean(enhanced, mask=ring_mask)[0]
-                contrast = abs(mean_int - mean_neighbor)
-                if contrast < p['min_contrast']:
-                    rejected_info.append(f"M{marker}: contraste {contrast:.1f}"); continue
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter > 0:
-                circularity = 4 * np.pi * area / (perimeter ** 2)
-                if circularity < p['min_circularity']:
-                    rejected_info.append(f"M{marker}: circ {circularity:.2f}"); continue
-            else:
-                continue
-            (cx, cy), r = cv2.minEnclosingCircle(cnt)
-            if r > 0:
-                compactness = area / (np.pi * r * r)
-                if compactness < 0.30:
-                    rejected_info.append(f"M{marker}: compact {compactness:.2f}"); continue
-            hull = cv2.convexHull(cnt)
-            hull_area = cv2.contourArea(hull)
-            if hull_area > 0:
-                solidity = area / hull_area
-                if solidity < p['min_solidity']:
-                    rejected_info.append(f"M{marker}: solid {solidity:.2f}"); continue
-            x_box, y_box, w_box, h_box = cv2.boundingRect(cnt)
-            aspect = max(w_box, h_box) / (min(w_box, h_box) + 1e-5)
-            if aspect > 3.5:
-                rejected_info.append(f"M{marker}: aspect {aspect:.1f}"); continue
-            if center and radius:
-                dist_center = np.sqrt((cx - center[0])**2 + (cy - center[1])**2)
-                rel_dist = dist_center / radius
-                if rel_dist > 0.91:
-                    rejected_info.append(f"M{marker}: borde {rel_dist:.2f}"); continue
-                if rel_dist < 0.03:
-                    rejected_info.append(f"M{marker}: centro"); continue
+            if area < p['min_area'] or area>p['max_area']: continue
+            perimeter = cv2.arcLength(cnt,True)
+            circularity = 4*np.pi*area/(perimeter**2) if perimeter>0 else 0
             M = cv2.moments(cnt)
-            if M["m00"] > 0:
-                cx_final = int(M["m10"] / M["m00"])
-                cy_final = int(M["m01"] / M["m00"])
-                valid_colonies.append({'centroid': (cx_final, cy_final), 'contour': cnt, 'area': area, 'circularity': circularity})
+            if M["m00"]>0:
+                cx=int(M["m10"]/M["m00"])
+                cy=int(M["m01"]/M["m00"])
+                valid_colonies.append({'centroid':(cx,cy),'contour':cnt,'area':area,'circularity':circularity})
 
-        colonies_count = len(valid_colonies)
+        # --- Separar colonias pegadas ---
+        separated_colonies=[]
+        for colony in valid_colonies:
+            if colony['area'] > 1.8*np.mean([c['area'] for c in valid_colonies]) and colony['circularity']<0.6:
+                # Región pegada -> aplicar distance transform local
+                mask = np.zeros_like(gray)
+                cv2.drawContours(mask,[colony['contour']],-1,255,-1)
+                dist = cv2.distanceTransform(mask,cv2.DIST_L2,5)
+                _, dt_thresh = cv2.threshold(dist,0.5*dist.max(),255,0)
+                dt_thresh = np.uint8(dt_thresh)
+                num, labels = cv2.connectedComponents(dt_thresh)
+                for i in range(1,num):
+                    submask = np.uint8(labels==i)*255
+                    contours,_ = cv2.findContours(submask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
+                    if contours:
+                        cnt_sub = max(contours,key=cv2.contourArea)
+                        M = cv2.moments(cnt_sub)
+                        if M["m00"]>0:
+                            cx=int(M["m10"]/M["m00"])
+                            cy=int(M["m01"]/M["m00"])
+                            separated_colonies.append({'centroid':(cx,cy),'contour':cnt_sub})
+            else:
+                separated_colonies.append(colony)
 
-        # --- 9️⃣ Visualización ---
+        colonies_count = len(separated_colonies)
+
+        # --- Dibujar resultados ---
         detected_img = img_rgb.copy()
-        if center and radius:
-            cv2.circle(detected_img, center, int(radius * 0.91), (255, 255, 0), 2)
-        for i, colony in enumerate(valid_colonies):
+        for colony in separated_colonies:
             cx, cy = colony['centroid']
-            cv2.circle(detected_img, (cx, cy), 7, (0, 255, 0), 2)
-            cv2.putText(detected_img, str(i + 1), (cx - 8, cy + 8), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 2)
+            cv2.circle(detected_img,(cx,cy),7,(0,255,0),2)
+        # Resaltar originales pegadas antes de separación (opcional)
+        for colony in valid_colonies:
+            if colony['area'] > 1.8*np.mean([c['area'] for c in valid_colonies]) and colony['circularity']<0.6:
+                cx,cy = colony['centroid']
+                cv2.circle(detected_img,(cx,cy),10,(0,0,255),2)
+                cv2.putText(detected_img,'x',(cx-5,cy+5),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0,0,255),2)
 
-        # --- 🔬 Detección de colonias pegadas ---
-        clustered_colonies = []
-        if colonies_count > 0:
-            areas = np.array([c['area'] for c in valid_colonies])
-            mean_area = np.mean(areas)
-            for colony in valid_colonies:
-                if colony['area'] > 1.8 * mean_area and colony['circularity'] < 0.6:
-                    clustered_colonies.append(colony)
+        print(f"🔬 Colonias detectadas (incluyendo separadas): {colonies_count}")
 
-        # Dibujar pegadas en rojo
-        for colony in clustered_colonies:
-            cx, cy = colony['centroid']
-            cv2.circle(detected_img, (cx, cy), 9, (0, 0, 255), 2)
-            cv2.putText(detected_img, "x", (cx - 5, cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-
-        # Resumen pegadas
-        if len(clustered_colonies) > 0:
-            print(f"⚠️ Colonias pegadas detectadas: {len(clustered_colonies)}")
-        else:
-            print("✅ No se detectaron colonias pegadas.")
-
-        # Contador total estimado (opcional)
-        adjusted_count = colonies_count + len(clustered_colonies)
-        cv2.putText(detected_img, f"ESTIMADO: {adjusted_count}", (15, 65),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2)
-
-        # --- 🔍 Debug ---
+        # --- Debug visual ---
         if debug:
-            fig, axes = plt.subplots(3, 3, figsize=(18, 12))
-            axes[0, 0].imshow(gray, cmap='gray'); axes[0, 0].set_title("1. Original")
-            axes[0, 1].imshow(enhanced, cmap='gray'); axes[0, 1].set_title("2. Enhanced")
-            axes[0, 2].imshow(binary, cmap='gray'); axes[0, 2].set_title("3. Binaria (mayoría 2/3)")
-            axes[1, 0].imshow(binary_eroded, cmap='gray'); axes[1, 0].set_title("4. Erosionada")
-            axes[1, 1].imshow(dist_transform, cmap='jet'); axes[1, 1].set_title("5. Distance Transform")
-            axes[1, 2].imshow(sure_fg, cmap='gray'); axes[1, 2].set_title("6. Centros detectados")
-            markers_display = markers.copy(); markers_display[markers_display == -1] = 0
-            axes[2, 0].imshow(markers_display, cmap='nipy_spectral'); axes[2, 0].set_title(f"7. Watershed ({num_labels-1} regiones)")
-            valid_mask = np.zeros_like(gray)
-            for colony in valid_colonies: cv2.drawContours(valid_mask, [colony['contour']], -1, 255, -1)
-            axes[2, 1].imshow(valid_mask, cmap='gray'); axes[2, 1].set_title(f"8. Válidas: {colonies_count}")
-            axes[2, 2].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)); axes[2, 2].set_title(f"9. Resultado final")
-            for ax in axes.flat: ax.axis('off')
-            plt.tight_layout(); st.pyplot(fig); plt.close()
-            if len(rejected_info) > 0:
-                print(f"\n📊 Rechazadas: {len(rejected_info)}")
-                for info in rejected_info[:15]:
-                    print(f"   {info}")
-
-        print(f"\n{'='*60}")
-        print(f"🔬 Colonias detectadas: {colonies_count}")
-        print(f"⚠️ Colonias pegadas: {len(clustered_colonies)}")
-        print(f"   Sensibilidad: {sensitivity}")
-        print(f"   Regiones watershed: {num_labels - 1}")
-        print(f"   Filtradas: {num_labels - 1 - colonies_count}")
-        print(f"{'='*60}\n")
+            fig,axes = plt.subplots(1,3,figsize=(18,6))
+            axes[0].imshow(gray,cmap='gray'); axes[0].set_title("Original")
+            axes[1].imshow(binary,cmap='gray'); axes[1].set_title("Binaria")
+            axes[2].imshow(cv2.cvtColor(detected_img,cv2.COLOR_BGR2RGB))
+            axes[2].set_title("Colonias detectadas")
+            for ax in axes: ax.axis('off')
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
 
         return colonies_count, original_img, detected_img
+
 
 
 
