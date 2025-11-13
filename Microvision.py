@@ -1176,6 +1176,13 @@ class MultiStandardAnalyzer:
             cv2.circle(detected, (cx,cy), 7, (0,255,0), 2)
             cv2.putText(detected, str(i+1), (cx-8,cy+8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0,255,0), 2)
+            
+
+        if original_img is None:
+            raise ValueError("Error: original_img es None. La imagen no se cargó correctamente.")
+        if not hasattr(original_img, "shape"):
+            raise ValueError("Error: original_img no es una imagen válida (no tiene atributo shape).")
+
 
         return len(valid), original_img, detected
 
