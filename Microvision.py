@@ -971,7 +971,6 @@ class MultiStandardAnalyzer:
 
 
     
-
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
         Conteo robusto de colonias con separación agresiva y reducción de falsos positivos
@@ -1123,24 +1122,29 @@ class MultiStandardAnalyzer:
             if cv2.countNonZero(mask) == 0:
                 continue
             
-            # Encontrar contorno en la imagen ORIGINAL (no erosionada) para mejor área
-            mask_original = np.zeros_like(gray, dtype=np.uint8)
-            cv2.floodFill(binary, mask_original, tuple(centroids[label].astype(int)), 255)
-            
-            contours_region, _ = cv2.findContours(mask_original, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Obtener el contorno directamente del watershed
+            contours_region, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours_region:
                 rejected_reasons.append(f"Label {label}: No contour")
                 continue
             
             cnt = max(contours_region, key=cv2.contourArea)
+            
+            # Crear máscara del contorno en la imagen binaria original (no erosionada)
+            mask_original = np.zeros_like(gray, dtype=np.uint8)
+            cv2.drawContours(mask_original, [cnt], -1, 255, -1)
+            
+            # Expandir la máscara un poco usando la binaria original
+            mask_original = cv2.bitwise_and(binary, mask_original)
+            
             area = cv2.contourArea(cnt)
             
             # ✅ Filtro 1: Área
             if area < p['min_area']:
-                rejected_reasons.append(f"Label {label}: Área muy pequeña ({area})")
+                rejected_reasons.append(f"Label {label}: Área muy pequeña ({area:.0f})")
                 continue
             if area > p['max_area']:
-                rejected_reasons.append(f"Label {label}: Área muy grande ({area})")
+                rejected_reasons.append(f"Label {label}: Área muy grande ({area:.0f})")
                 continue
             
             # ✅ Filtro 2: Intensidad media
@@ -1200,7 +1204,7 @@ class MultiStandardAnalyzer:
             circle_area = np.pi * r * r
             compactness = area / (circle_area + 1e-5)
             
-            if compactness < 0.35:  # Reducido de 0.4
+            if compactness < 0.35:
                 rejected_reasons.append(f"Label {label}: Compacidad baja ({compactness:.2f})")
                 continue
             
@@ -1223,7 +1227,7 @@ class MultiStandardAnalyzer:
             # ⭐ NUEVO: Detectar si es una colonia grande que contiene múltiples colonias
             avg_colony_area = (p['min_area'] + p['max_area']) / 2
             
-            if area > avg_colony_area * 2.0 and circularity < 0.7:
+            if area > avg_colony_area * 2.2 and circularity < 0.7:
                 # Calcular cuántas colonias podría contener
                 estimated_count = int(area / avg_colony_area)
                 estimated_count = max(2, min(estimated_count, 5))  # Entre 2 y 5
@@ -1231,44 +1235,45 @@ class MultiStandardAnalyzer:
                 # Analizar concavidades
                 hull_pts = cv2.convexHull(cnt, returnPoints=False)
                 if len(hull_pts) > 3:
-                    defects = cv2.convexityDefects(cnt, hull_pts)
-                    
-                    if defects is not None and len(defects) >= 2:
-                        # Tiene concavidades significativas -> probablemente múltiples colonias
-                        M = cv2.moments(cnt)
-                        if M["m00"] != 0:
-                            cx_main = int(M["m10"] / M["m00"])
-                            cy_main = int(M["m01"] / M["m00"])
-                            
-                            # Distribuir centroides usando los puntos del contorno
-                            # Encontrar picos de distancia desde el centroide
-                            cnt_points = cnt.reshape(-1, 2)
-                            distances = [np.sqrt((p[0]-cx_main)**2 + (p[1]-cy_main)**2) for p in cnt_points]
-                            
-                            # Usar clustering simple para encontrar sub-regiones
-                            from scipy.ndimage import label as nd_label
-                            
-                            # Crear máscara local y aplicar watershed local
-                            local_mask = mask_original[y_min:y_max, x_min:x_max]
-                            local_dist = cv2.distanceTransform(local_mask, cv2.DIST_L2, 5)
-                            local_dist = cv2.GaussianBlur(local_dist, (5, 5), 0)
-                            
-                            _, local_peaks = cv2.threshold(local_dist, 0.15 * local_dist.max(), 255, 0)
-                            local_peaks = np.uint8(local_peaks)
-                            
-                            n_components, local_labels = cv2.connectedComponents(local_peaks)
-                            
-                            # Agregar un centroide por cada componente
-                            for comp_id in range(1, min(n_components, estimated_count + 1)):
-                                comp_mask = (local_labels == comp_id).astype(np.uint8) * 255
-                                M_local = cv2.moments(comp_mask)
-                                if M_local["m00"] > 0:
-                                    cx_local = int(M_local["m10"] / M_local["m00"]) + x_min
-                                    cy_local = int(M_local["m01"] / M_local["m00"]) + y_min
-                                    valid_centroids.append((cx_local, cy_local))
-                            
-                            valid_contours.append(cnt)
-                            continue
+                    try:
+                        defects = cv2.convexityDefects(cnt, hull_pts)
+                        
+                        if defects is not None and len(defects) >= 2:
+                            # Tiene concavidades significativas -> probablemente múltiples colonias
+                            M = cv2.moments(cnt)
+                            if M["m00"] != 0:
+                                cx_main = int(M["m10"] / M["m00"])
+                                cy_main = int(M["m01"] / M["m00"])
+                                
+                                # Aplicar watershed local en esta región
+                                local_mask = mask_original[y_min:y_max, x_min:x_max].copy()
+                                
+                                if local_mask.shape[0] > 10 and local_mask.shape[1] > 10:
+                                    local_dist = cv2.distanceTransform(local_mask, cv2.DIST_L2, 5)
+                                    local_dist = cv2.GaussianBlur(local_dist, (5, 5), 0)
+                                    
+                                    if local_dist.max() > 0:
+                                        _, local_peaks = cv2.threshold(local_dist, 0.15 * local_dist.max(), 255, 0)
+                                        local_peaks = np.uint8(local_peaks)
+                                        
+                                        n_components, local_labels = cv2.connectedComponents(local_peaks)
+                                        
+                                        # Agregar un centroide por cada componente
+                                        added = 0
+                                        for comp_id in range(1, min(n_components, estimated_count + 1)):
+                                            comp_mask = (local_labels == comp_id).astype(np.uint8) * 255
+                                            M_local = cv2.moments(comp_mask)
+                                            if M_local["m00"] > 0:
+                                                cx_local = int(M_local["m10"] / M_local["m00"]) + x_min
+                                                cy_local = int(M_local["m01"] / M_local["m00"]) + y_min
+                                                valid_centroids.append((cx_local, cy_local))
+                                                added += 1
+                                        
+                                        if added > 0:
+                                            valid_contours.append(cnt)
+                                            continue
+                    except:
+                        pass  # Si falla el análisis de defectos, continuar normalmente
             
             # ✅ COLONIA VÁLIDA SIMPLE
             M = cv2.moments(cnt)
