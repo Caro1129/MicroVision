@@ -981,49 +981,52 @@ class MultiStandardAnalyzer:
         import streamlit as st
         from scipy import ndimage
 
-        # --- PARÁMETROS RE-BALANCEADOS ---
+        # --- PARÁMETROS FINALMENTE BALANCEADOS ---
         params = {
             'low': {
                 'blur': 5, 
-                'min_area': 60,
-                'max_area': 3000,
-                'min_circularity': 0.50,
-                'intensity_range': (35, 230),
-                'min_contrast': 10,
-                'min_std': 4,
-                'max_std': 35,  # NUEVO: rechazar ruido excesivo
-                'erosion_iter': 3,
-                'dist_threshold': 0.18,
+                'min_area': 50,
+                'max_area': 3500,
+                'min_circularity': 0.42,
+                'intensity_range': (30, 235),
+                'min_contrast': 7,
+                'min_std': 3.0,
+                'max_std': 45,
+                'erosion_iter': 2,
+                'dist_threshold': 0.20,
                 'multi_colony_factor': 1.9,
-                'min_solidity': 0.55
+                'min_solidity': 0.48,
+                'max_aspect_ratio': 2.8
             },
             'medium': {
                 'blur': 7, 
-                'min_area': 40,
+                'min_area': 35,
                 'max_area': 5000,
-                'min_circularity': 0.45,
-                'intensity_range': (30, 235),
-                'min_contrast': 8,
-                'min_std': 3.5,
-                'max_std': 38,
-                'erosion_iter': 3,
-                'dist_threshold': 0.16,
+                'min_circularity': 0.38,
+                'intensity_range': (25, 240),
+                'min_contrast': 6,
+                'min_std': 2.5,
+                'max_std': 50,
+                'erosion_iter': 2,
+                'dist_threshold': 0.18,
                 'multi_colony_factor': 1.8,
-                'min_solidity': 0.52
+                'min_solidity': 0.45,
+                'max_aspect_ratio': 3.0
             },
             'high': {
                 'blur': 9, 
                 'min_area': 25,
                 'max_area': 6000,
-                'min_circularity': 0.40,
-                'intensity_range': (25, 240),
-                'min_contrast': 6,
-                'min_std': 3,
-                'max_std': 40,
-                'erosion_iter': 3,
-                'dist_threshold': 0.14,
+                'min_circularity': 0.35,
+                'intensity_range': (20, 245),
+                'min_contrast': 5,
+                'min_std': 2.0,
+                'max_std': 55,
+                'erosion_iter': 2,
+                'dist_threshold': 0.16,
                 'multi_colony_factor': 1.7,
-                'min_solidity': 0.50
+                'min_solidity': 0.42,
+                'max_aspect_ratio': 3.2
             }
         }
         p = params.get(sensitivity, params['medium'])
@@ -1064,26 +1067,21 @@ class MultiStandardAnalyzer:
         clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(blurred)
 
-        # --- 4️⃣ Binarización HÍBRIDA mejorada ---
+        # --- 4️⃣ Binarización SIMPLIFICADA ---
         # Invertir si es imagen oscura
         meanv = np.mean(enhanced[plate_mask > 0])
         if meanv < 128:
             enhanced = cv2.bitwise_not(enhanced)
         
-        # Método 1: Threshold adaptativo
-        binary_adaptive = cv2.adaptiveThreshold(
+        # Solo threshold adaptativo (más permisivo que la combinación)
+        binary = cv2.adaptiveThreshold(
             enhanced, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 
-            71,
-            4
+            61,  # Reducido de 71
+            3    # Reducido de 4
         )
         
-        # Método 2: Otsu para referencia global
-        _, binary_otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        
-        # Combinar: tomar solo regiones que aparecen en AMBOS métodos (más estricto)
-        binary = cv2.bitwise_and(binary_adaptive, binary_otsu)
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
         # --- 5️⃣ Limpieza morfológica + separación inteligente ---
@@ -1182,15 +1180,6 @@ class MultiStandardAnalyzer:
                 if std_intensity > p['max_std']:
                     rejected_reasons.append(f"Label {label}: Textura muy ruidosa ({std_intensity:.1f})")
                     continue
-                
-                # NUEVO: Verificar homogeneidad - rechazar parches muy irregulares
-                median_intensity = np.median(region_pixels)
-                intensity_range = np.percentile(region_pixels, 95) - np.percentile(region_pixels, 5)
-                
-                # Si el rango de intensidad es muy amplio, probablemente no es una colonia
-                if intensity_range > 80:
-                    rejected_reasons.append(f"Label {label}: Rango de intensidad muy amplio ({intensity_range:.1f})")
-                    continue
             
             # ✅ Filtro 4: Contraste local MEJORADO
             y_coords, x_coords = np.where(mask_original > 0)
@@ -1234,11 +1223,19 @@ class MultiStandardAnalyzer:
                 rejected_reasons.append(f"Label {label}: Compacidad baja ({compactness:.2f})")
                 continue
             
-            # ✅ Filtro 7: Posición (no en bordes EXTREMOS solamente)
+            # ✅ Filtro 7: Posición - RECHAZAR BORDES MÁS AGRESIVAMENTE
             if center and radius:
                 dist_to_center = np.sqrt((x - center[0])**2 + (y - center[1])**2)
-                if dist_to_center > radius * 0.93:  # Ampliado de 0.88 a 0.93
-                    rejected_reasons.append(f"Label {label}: Muy cerca del borde")
+                
+                # Rechazar si está MUY cerca del borde (falsos positivos)
+                if dist_to_center > radius * 0.92:
+                    rejected_reasons.append(f"Label {label}: Muy cerca del borde ({dist_to_center/radius:.2f})")
+                    continue
+                
+                # NUEVO: También rechazar si está demasiado LEJOS del centro esperado
+                # (a veces detecta artefactos muy en el borde)
+                if dist_to_center < radius * 0.05:  # Muy cerca del centro (artefacto)
+                    rejected_reasons.append(f"Label {label}: Demasiado central")
                     continue
             
             # ✅ Filtro 8: Solidez - MÁS ESTRICTO
@@ -1256,7 +1253,7 @@ class MultiStandardAnalyzer:
             aspect_ratio = max(w_box, h_box) / (min(w_box, h_box) + 1e-5)
             
             # Rechazar formas muy alargadas (no son colonias circulares)
-            if aspect_ratio > 2.5:
+            if aspect_ratio > p['max_aspect_ratio']:
                 rejected_reasons.append(f"Label {label}: Forma muy alargada ({aspect_ratio:.2f})")
                 continue
             
@@ -1339,7 +1336,11 @@ class MultiStandardAnalyzer:
         # --- 🎨 Dibujar resultados ---
         detected_img = img_rgb.copy()
         if center:
-            cv2.circle(detected_img, center, int(radius * 0.95), (255, 255, 0), 2)  # Actualizado
+            # Dibujar el área válida
+            cv2.circle(detected_img, center, int(radius * 0.92), (255, 255, 0), 2)
+            # Dibujar también el límite interno si existe
+            if radius * 0.05 > 5:
+                cv2.circle(detected_img, center, int(radius * 0.05), (255, 0, 0), 1)
 
         for i, (cx, cy) in enumerate(valid_centroids):
             cv2.circle(detected_img, (cx, cy), 8, (0, 255, 0), 2)
