@@ -982,37 +982,40 @@ class MultiStandardAnalyzer:
         import streamlit as st
         from scipy import ndimage
 
-        # --- PARÁMETROS OPTIMIZADOS ---
+        # --- PARÁMETROS BALANCEADOS ---
         params = {
             'low': {
                 'blur': 5, 
-                'min_area': 60,
-                'max_area': 2500,
-                'min_circularity': 0.55,
-                'intensity_range': (45, 215),
-                'min_contrast': 20,
-                'min_std': 8,  # Nuevo: desviación estándar mínima
-                'erosion_iter': 3
+                'min_area': 50,
+                'max_area': 3000,
+                'min_circularity': 0.45,
+                'intensity_range': (30, 235),
+                'min_contrast': 8,
+                'min_std': 3,  # Reducido
+                'erosion_iter': 1,
+                'dist_threshold': 0.25
             },
             'medium': {
                 'blur': 7, 
-                'min_area': 40,
+                'min_area': 30,
                 'max_area': 5000,
-                'min_circularity': 0.50,
-                'intensity_range': (40, 220),
-                'min_contrast': 15,
-                'min_std': 6,
-                'erosion_iter': 2
+                'min_circularity': 0.40,
+                'intensity_range': (25, 240),
+                'min_contrast': 6,
+                'min_std': 2.5,
+                'erosion_iter': 1,
+                'dist_threshold': 0.22
             },
             'high': {
                 'blur': 9, 
-                'min_area': 25,
-                'max_area': 2000,
-                'min_circularity': 0.45,
-                'intensity_range': (35, 225),
-                'min_contrast': 12,
-                'min_std': 5,
-                'erosion_iter': 2
+                'min_area': 20,
+                'max_area': 6000,
+                'min_circularity': 0.35,
+                'intensity_range': (20, 245),
+                'min_contrast': 5,
+                'min_std': 2,
+                'erosion_iter': 1,
+                'dist_threshold': 0.20
             }
         }
         p = params.get(sensitivity, params['medium'])
@@ -1043,50 +1046,53 @@ class MultiStandardAnalyzer:
         else:
             plate_mask[:] = 255
 
-        # --- 3️⃣ Preprocesamiento con reducción de ruido ---
+        # --- 3️⃣ Preprocesamiento balanceado ---
         masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
         
-        # Filtro bilateral para preservar bordes pero suavizar ruido
-        denoised = cv2.bilateralFilter(masked, 9, 75, 75)
+        # Suavizado moderado
+        blurred = cv2.GaussianBlur(masked, (5, 5), 0)
         
-        # CLAHE más agresivo
-        clahe = cv2.createCLAHE(clipLimit=10.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(denoised)
+        # CLAHE moderado
+        clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(blurred)
 
-        # --- 4️⃣ Binarización híbrida ---
-        # Método 1: Threshold de Otsu global
-        _, binary_otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # --- 4️⃣ Binarización mejorada ---
+        # Invertir si es imagen oscura
+        meanv = np.mean(enhanced[plate_mask > 0])
+        if meanv < 128:
+            enhanced = cv2.bitwise_not(enhanced)
         
-        # Método 2: Threshold adaptativo
-        binary_adaptive = cv2.adaptiveThreshold(
+        # Threshold adaptativo con ventana grande
+        binary = cv2.adaptiveThreshold(
             enhanced, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 
-            91,  # Ventana grande para contexto local
-            5
+            71,  # Ventana mediana
+            4
         )
         
-        # Combinar ambos métodos (AND lógico)
-        binary = cv2.bitwise_and(binary_otsu, binary_adaptive)
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
-        # --- 5️⃣ Limpieza morfológica AGRESIVA ---
-        kernel = np.ones((3, 3), np.uint8)
+        # --- 5️⃣ Limpieza morfológica BALANCEADA ---
+        kernel = np.ones((2, 2), np.uint8)
         
-        # Apertura para eliminar ruido pequeño
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
+        # Apertura suave
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
         
-        # EROSIÓN para separar colonias pegadas
-        kernel_erode = np.ones((2, 2), np.uint8)
-        binary_eroded = cv2.erode(binary, kernel_erode, iterations=p['erosion_iter'])
+        # Cierre para unir fragmentos
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
         
-        # --- 6️⃣ Distance Transform MÁS AGRESIVO ---
+        # Erosión MÍNIMA solo si el parámetro lo indica
+        if p['erosion_iter'] > 0:
+            binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
+        else:
+            binary_eroded = binary.copy()
+        
+        # --- 6️⃣ Distance Transform BALANCEADO ---
         dist = cv2.distanceTransform(binary_eroded, cv2.DIST_L2, 5)
-        dist_normalized = cv2.normalize(dist, None, 0, 1, cv2.NORM_MINMAX)
         
-        # Encontrar picos locales (centros de colonias)
-        # Umbral MUY BAJO para detectar más centros
-        _, sure_fg = cv2.threshold(dist, 0.2 * dist.max(), 255, 0)
+        # Umbral dinámico basado en el parámetro
+        _, sure_fg = cv2.threshold(dist, p['dist_threshold'] * dist.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
         
         # --- 7️⃣ Análisis de componentes conectados ---
@@ -1129,28 +1135,30 @@ class MultiStandardAnalyzer:
             if not (p['intensity_range'][0] < mean_intensity < p['intensity_range'][1]):
                 continue
             
-            # ✅ Filtro 3: TEXTURA (desviación estándar) - NUEVO
+            # ✅ Filtro 3: TEXTURA (desviación estándar) - RELAJADO
             # Las colonias reales tienen textura, el fondo es uniforme
-            std_intensity = np.std(enhanced[mask > 0])
-            if std_intensity < p['min_std']:
-                continue
+            region_pixels = enhanced[mask > 0]
+            if len(region_pixels) > 5:
+                std_intensity = np.std(region_pixels)
+                if std_intensity < p['min_std']:
+                    continue
             
-            # ✅ Filtro 4: Contraste con vecindad
+            # ✅ Filtro 4: Contraste con vecindad - RELAJADO
             y_coords, x_coords = np.where(mask > 0)
             if len(y_coords) == 0:
                 continue
             
-            y_min = max(0, y_coords.min() - 15)
-            y_max = min(enhanced.shape[0], y_coords.max() + 15)
-            x_min = max(0, x_coords.min() - 15)
-            x_max = min(enhanced.shape[1], x_coords.max() + 15)
+            y_min = max(0, y_coords.min() - 10)
+            y_max = min(enhanced.shape[0], y_coords.max() + 10)
+            x_min = max(0, x_coords.min() - 10)
+            x_max = min(enhanced.shape[1], x_coords.max() + 10)
             
             # Crear máscara del anillo exterior
             mask_expanded = np.zeros_like(mask)
             mask_expanded[y_min:y_max, x_min:x_max] = 255
             mask_ring = cv2.subtract(mask_expanded, mask)
             
-            if cv2.countNonZero(mask_ring) > 0:
+            if cv2.countNonZero(mask_ring) > 10:
                 mean_neighbor = cv2.mean(enhanced, mask=mask_ring)[0]
                 contrast = abs(mean_intensity - mean_neighbor)
                 
@@ -1180,12 +1188,12 @@ class MultiStandardAnalyzer:
                 if dist_to_center > radius * 0.88:
                     continue
             
-            # ✅ Filtro 8: Verificar solidez (convex hull)
+            # ✅ Filtro 8: Verificar solidez (convex hull) - RELAJADO
             hull = cv2.convexHull(cnt)
             hull_area = cv2.contourArea(hull)
             if hull_area > 0:
                 solidity = area / hull_area
-                if solidity < 0.7:  # Muy irregular
+                if solidity < 0.5:  # Reducido de 0.7 a 0.5
                     continue
             
             # ✅ TODO PASÓ - Es una colonia válida
@@ -1262,7 +1270,6 @@ class MultiStandardAnalyzer:
         print(f"{'='*60}\n")
 
         return colonies_count, original_img, detected_img
-
 
 
 
