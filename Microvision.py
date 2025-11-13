@@ -1028,32 +1028,32 @@ class MultiStandardAnalyzer:
         # --- PARÁMETROS OPTIMIZADOS POR SENSIBILIDAD ---
         params = {
             'low': {
-                'min_area': 30, 'max_area': 8000,
-                'min_circularity': 0.30,
-                'min_contrast': 5,
-                'min_std': 1.0, 'max_std': 50,
-                'erosion_iter': 1,
-                'dist_threshold': 0.20,
-                'min_solidity': 0.35
-            },
-
-            'medium': {
-                'min_area': 20, 'max_area': 9000,
-                'min_circularity': 0.25,
+                'min_area': 25, 'max_area': 8000,
+                'min_circularity': 0.28,
                 'min_contrast': 4,
-                'min_std': 0.8, 'max_std': 55,
+                'min_std': 0.8, 'max_std': 50,
                 'erosion_iter': 1,
                 'dist_threshold': 0.18,
                 'min_solidity': 0.30
             },
 
-            'high': {
-                'min_area': 15, 'max_area': 10000,
-                'min_circularity': 0.20,
+            'medium': {
+                'min_area': 18, 'max_area': 9000,
+                'min_circularity': 0.25,
                 'min_contrast': 3,
-                'min_std': 0.5, 'max_std': 60,
+                'min_std': 0.6, 'max_std': 55,
                 'erosion_iter': 1,
-                'dist_threshold': 0.15,
+                'dist_threshold': 0.16,
+                'min_solidity': 0.28
+            },
+
+            'high': {
+                'min_area': 12, 'max_area': 10000,
+                'min_circularity': 0.22,
+                'min_contrast': 2,
+                'min_std': 0.4, 'max_std': 60,
+                'erosion_iter': 1,
+                'dist_threshold': 0.14,
                 'min_solidity': 0.25
             }
         }
@@ -1120,37 +1120,44 @@ class MultiStandardAnalyzer:
             enhanced = clahe.apply(denoised)
             background = enhanced.copy()
 
-        # --- 4️⃣ Binarización TRIPLE con votación ---
+        # --- 4️⃣ Binarización MEJORADA con múltiples métodos ---
         # Detectar si colonias son claras u oscuras
         meanv = np.mean(enhanced[plate_mask > 0])
         
-        # Método 1: Adaptativo Gaussiano
+        # Método 1: Adaptativo Gaussiano con ventana pequeña
         binary1 = cv2.adaptiveThreshold(
+            enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 35, 2
+        )
+
+        # Método 2: Adaptativo Gaussiano con ventana mediana
+        binary2 = cv2.adaptiveThreshold(
             enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 51, 3
         )
 
-        # Método 2: Adaptativo Mean
-        binary2 = cv2.adaptiveThreshold(
+        # Método 3: Adaptativo Mean
+        binary3 = cv2.adaptiveThreshold(
             enhanced, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY_INV, 51, 3
+            cv2.THRESH_BINARY_INV, 41, 2
         )
 
-        # Método 3: Otsu
+        # Método 4: Otsu
         blur_local = cv2.GaussianBlur(enhanced, (5, 5), 0)
-        _, binary3 = cv2.threshold(
+        _, binary4 = cv2.threshold(
             blur_local, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
 
-        # Votación: al menos 2 de 3 métodos deben estar de acuerdo
-        binary_sum = (binary1.astype(float) + binary2.astype(float) + binary3.astype(float)) / 255.0
-        binary = ((binary_sum >= 2.0) * 255).astype(np.uint8)
+        # UNIÓN de todos los métodos (detecta más colonias)
+        binary = cv2.bitwise_or(binary1, binary2)
+        binary = cv2.bitwise_or(binary, binary3)
+        binary = cv2.bitwise_or(binary, binary4)
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
-        # --- 5️⃣ Limpieza morfológica ---
+        # --- 5️⃣ Limpieza morfológica SUAVE ---
         kernel = np.ones((2, 2), np.uint8)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=3)
 
         # --- 6️⃣ Erosión para separar colonias ---
         binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
