@@ -1028,33 +1028,34 @@ class MultiStandardAnalyzer:
         # --- PARÁMETROS OPTIMIZADOS POR SENSIBILIDAD ---
         params = {
             'low': {
-                'min_area': 35, 'max_area': 4500,
-                'min_circularity': 0.55,
-                'min_contrast': 10,
-                'min_std': 3.0, 'max_std': 35,
+                'min_area': 25, 'max_area': 6000,
+                'min_circularity': 0.45,      # antes 0.55
+                'min_contrast': 7,            # antes 10
+                'min_std': 1.5, 'max_std': 35, # antes 3.0
                 'erosion_iter': 1,
-                'dist_threshold': 0.25,
-                'min_solidity': 0.60
+                'dist_threshold': 0.22,       # antes 0.25
+                'min_solidity': 0.48          # antes 0.60
             },
-            'medium': {
-                'min_area': 22, 'max_area': 6000,
-                'min_circularity': 0.58,
-                'min_contrast': 12,
-                'min_std': 2.5, 'max_std': 28,
-                'erosion_iter': 1,
-                'dist_threshold': 0.23,
-                'min_solidity': 0.62
-            },
-            'high': {
-                'min_area': 15, 'max_area': 7500,
-                'min_circularity': 0.55,
-                'min_contrast': 10,
-                'min_std': 2.2, 'max_std': 30,
-                'erosion_iter': 1,
-                'dist_threshold': 0.21,
-                'min_solidity': 0.60
-            }
 
+            'medium': {
+                'min_area': 18, 'max_area': 7500,
+                'min_circularity': 0.48,      # antes 0.58
+                'min_contrast': 7,            # antes 12
+                'min_std': 1.5, 'max_std': 30, # antes 2.5
+                'erosion_iter': 1,
+                'dist_threshold': 0.21,       # antes 0.23
+                'min_solidity': 0.50          # antes 0.62
+            },
+
+            'high': {
+                'min_area': 15, 'max_area': 9000,
+                'min_circularity': 0.42,      # antes 0.55
+                'min_contrast': 6,            # antes 10
+                'min_std': 1.2, 'max_std': 28,
+                'erosion_iter': 1,
+                'dist_threshold': 0.18,       # antes 0.21
+                'min_solidity': 0.45          # antes 0.60
+            }
         }
 
         p = params.get(sensitivity, params['medium'])
