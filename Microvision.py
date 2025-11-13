@@ -1015,7 +1015,7 @@ class MultiStandardAnalyzer:
 
     
     
-    def count_colonies_ecoli(self, original_img, debug=False):
+    def count_colonies_opencv(self, original_img, debug=False):
         """
         Contador de colonias optimizado para E. coli
         - mayor sensibilidad
