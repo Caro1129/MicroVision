@@ -981,43 +981,49 @@ class MultiStandardAnalyzer:
         import streamlit as st
         from scipy import ndimage
 
-        # --- PARÁMETROS BALANCEADOS ---
+        # --- PARÁMETROS RE-BALANCEADOS ---
         params = {
             'low': {
                 'blur': 5, 
-                'min_area': 50,
+                'min_area': 60,
                 'max_area': 3000,
-                'min_circularity': 0.45,
-                'intensity_range': (30, 235),
-                'min_contrast': 8,
-                'min_std': 3,
-                'erosion_iter': 2,  # Aumentado para mejor separación
-                'dist_threshold': 0.20,
-                'multi_colony_factor': 1.8  # Umbral para detectar colonias múltiples
+                'min_circularity': 0.50,
+                'intensity_range': (35, 230),
+                'min_contrast': 10,
+                'min_std': 4,
+                'max_std': 35,  # NUEVO: rechazar ruido excesivo
+                'erosion_iter': 3,
+                'dist_threshold': 0.18,
+                'multi_colony_factor': 1.9,
+                'min_solidity': 0.55
             },
             'medium': {
                 'blur': 7, 
-                'min_area': 30,
+                'min_area': 40,
                 'max_area': 5000,
-                'min_circularity': 0.40,
-                'intensity_range': (25, 240),
-                'min_contrast': 6,
-                'min_std': 2.5,
-                'erosion_iter': 2,
-                'dist_threshold': 0.18,
-                'multi_colony_factor': 1.7
+                'min_circularity': 0.45,
+                'intensity_range': (30, 235),
+                'min_contrast': 8,
+                'min_std': 3.5,
+                'max_std': 38,
+                'erosion_iter': 3,
+                'dist_threshold': 0.16,
+                'multi_colony_factor': 1.8,
+                'min_solidity': 0.52
             },
             'high': {
                 'blur': 9, 
-                'min_area': 20,
+                'min_area': 25,
                 'max_area': 6000,
-                'min_circularity': 0.35,
-                'intensity_range': (20, 245),
-                'min_contrast': 5,
-                'min_std': 2,
-                'erosion_iter': 2,
-                'dist_threshold': 0.15,
-                'multi_colony_factor': 1.6
+                'min_circularity': 0.40,
+                'intensity_range': (25, 240),
+                'min_contrast': 6,
+                'min_std': 3,
+                'max_std': 40,
+                'erosion_iter': 3,
+                'dist_threshold': 0.14,
+                'multi_colony_factor': 1.7,
+                'min_solidity': 0.50
             }
         }
         p = params.get(sensitivity, params['medium'])
@@ -1058,21 +1064,26 @@ class MultiStandardAnalyzer:
         clahe = cv2.createCLAHE(clipLimit=5.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(blurred)
 
-        # --- 4️⃣ Binarización mejorada ---
+        # --- 4️⃣ Binarización HÍBRIDA mejorada ---
         # Invertir si es imagen oscura
         meanv = np.mean(enhanced[plate_mask > 0])
         if meanv < 128:
             enhanced = cv2.bitwise_not(enhanced)
         
-        # Threshold adaptativo con ventana grande
-        binary = cv2.adaptiveThreshold(
+        # Método 1: Threshold adaptativo
+        binary_adaptive = cv2.adaptiveThreshold(
             enhanced, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 
-            71,  # Ventana mediana
+            71,
             4
         )
         
+        # Método 2: Otsu para referencia global
+        _, binary_otsu = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        
+        # Combinar: tomar solo regiones que aparecen en AMBOS métodos (más estricto)
+        binary = cv2.bitwise_and(binary_adaptive, binary_otsu)
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
         # --- 5️⃣ Limpieza morfológica + separación inteligente ---
@@ -1157,17 +1168,28 @@ class MultiStandardAnalyzer:
                 rejected_reasons.append(f"Label {label}: Intensidad fuera de rango ({mean_intensity:.1f})")
                 continue
             
-            # ✅ Filtro 3: TEXTURA mejorada
+            # ✅ Filtro 3: TEXTURA mejorada con límites superior e inferior
             region_pixels = enhanced[mask_original > 0]
             if len(region_pixels) > 5:
                 std_intensity = np.std(region_pixels)
                 
-                # Rechazar si textura es muy uniforme (fondo) o muy ruidosa
+                # Rechazar si textura es muy uniforme (fondo)
                 if std_intensity < p['min_std']:
                     rejected_reasons.append(f"Label {label}: Textura muy uniforme ({std_intensity:.1f})")
                     continue
-                if std_intensity > 40:  # NUEVO: rechazar ruido excesivo
+                
+                # Rechazar si textura es muy ruidosa (artefactos)
+                if std_intensity > p['max_std']:
                     rejected_reasons.append(f"Label {label}: Textura muy ruidosa ({std_intensity:.1f})")
+                    continue
+                
+                # NUEVO: Verificar homogeneidad - rechazar parches muy irregulares
+                median_intensity = np.median(region_pixels)
+                intensity_range = np.percentile(region_pixels, 95) - np.percentile(region_pixels, 5)
+                
+                # Si el rango de intensidad es muy amplio, probablemente no es una colonia
+                if intensity_range > 80:
+                    rejected_reasons.append(f"Label {label}: Rango de intensidad muy amplio ({intensity_range:.1f})")
                     continue
             
             # ✅ Filtro 4: Contraste local MEJORADO
@@ -1219,14 +1241,24 @@ class MultiStandardAnalyzer:
                     rejected_reasons.append(f"Label {label}: Muy cerca del borde")
                     continue
             
-            # ✅ Filtro 8: Solidez
+            # ✅ Filtro 8: Solidez - MÁS ESTRICTO
             hull = cv2.convexHull(cnt)
             hull_area = cv2.contourArea(hull)
             if hull_area > 0:
                 solidity = area / hull_area
-                if solidity < 0.5:
+                if solidity < p['min_solidity']:
                     rejected_reasons.append(f"Label {label}: Solidez baja ({solidity:.2f})")
                     continue
+            
+            # ✅ Filtro 9: NUEVO - Verificar que tiene aspecto de colonia real
+            # Calcular ratio de aspecto (ancho/alto del bounding box)
+            x_box, y_box, w_box, h_box = cv2.boundingRect(cnt)
+            aspect_ratio = max(w_box, h_box) / (min(w_box, h_box) + 1e-5)
+            
+            # Rechazar formas muy alargadas (no son colonias circulares)
+            if aspect_ratio > 2.5:
+                rejected_reasons.append(f"Label {label}: Forma muy alargada ({aspect_ratio:.2f})")
+                continue
             
             # ⭐ NUEVO: Detectar si es una colonia grande que contiene múltiples colonias
             avg_colony_area = (p['min_area'] + p['max_area']) / 2
@@ -1270,8 +1302,9 @@ class MultiStandardAnalyzer:
                                     local_dist = cv2.GaussianBlur(local_dist, (5, 5), 0)
                                     
                                     if local_dist.max() > 0:
-                                        # Umbral MUY BAJO para detectar más centros
-                                        _, local_peaks = cv2.threshold(local_dist, 0.12 * local_dist.max(), 255, 0)
+                                        # Umbral MÁS BAJO para detectar más centros en colonias pegadas
+                                        local_threshold = 0.10 * local_dist.max()  # Reducido de 0.12
+                                        _, local_peaks = cv2.threshold(local_dist, local_threshold, 255, 0)
                                         local_peaks = np.uint8(local_peaks)
                                         
                                         n_components, local_labels = cv2.connectedComponents(local_peaks)
