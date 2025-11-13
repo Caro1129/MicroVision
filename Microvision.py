@@ -958,17 +958,7 @@ class MultiStandardAnalyzer:
                 'halo_mask': halo_mask
             }
 
-        # Dentro de la función analyze_halo_TM147_visual_final
-        # Antes del último return, agrega:
-        print(f"DEBUG: r_textil={r_textil}px, r_petri={r_petri}px, mm_per_pixel={mm_per_pixel:.6f}")
-        print(f"DEBUG: Mediciones={len(halo_dists)}, Promedio={avg_halo_mm:.2f}mm")
-        print(f"DEBUG: Primeras 10 mediciones: {halo_dists[:10]}")
-
         return mask_textil, mask_growth, avg_halo_mm, overlay_final, measurements, (cx_textil, cy_textil, r_textil)
-
-    
-
-
 
 
 
