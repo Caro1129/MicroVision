@@ -971,57 +971,50 @@ class MultiStandardAnalyzer:
 
 
     
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
+    def count_colonies_opencv(self, original_img, debug=False, sensitivity='medium'):
         """
-        Conteo de colonias para Streamlit con manejo de errores.
-        - Solo colonias reales
-        - Colonias separadas
-        - Colonias dibujadas en azul
+        Conteo de colonias azules reales:
+        - Detecta solo azul (HSV)
+        - Filtra ruido
+        - Separa colonias pegadas (watershed)
+        - Dibuja en azul
         """
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
         import streamlit as st
+        import traceback
 
         try:
-            # --- Parámetros según sensibilidad ---
+            if original_img is None or not isinstance(original_img, np.ndarray):
+                raise ValueError("original_img debe ser un np.ndarray válido")
+            
+            # --- Parametros según sensibilidad ---
             params = {
-                'low': {'min_area': 45, 'max_area': 4000, 'erosion_iter': 2, 'dist_threshold': 0.22},
-                'medium': {'min_area': 30, 'max_area': 5500, 'erosion_iter': 2, 'dist_threshold': 0.19},
-                'high': {'min_area': 20, 'max_area': 7000, 'erosion_iter': 2, 'dist_threshold': 0.17}
+                'low': {'min_area': 45, 'erosion_iter': 2, 'dist_thresh':0.22},
+                'medium': {'min_area': 30, 'erosion_iter': 2, 'dist_thresh':0.19},
+                'high': {'min_area': 20, 'erosion_iter': 2, 'dist_thresh':0.17}
             }
             p = params.get(sensitivity, params['medium'])
 
-            # --- Preparar imagen ---
-            if original_img is None:
-                raise ValueError("original_img es None")
-            if len(original_img.shape) == 2:
-                gray = original_img
-                img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2BGR)
-            else:
-                gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-                img_rgb = original_img.copy()
+            img_rgb = original_img.copy()
+            h, w = img_rgb.shape[:2]
 
-            # --- Preprocesamiento ---
-            blur = cv2.GaussianBlur(gray, (7,7), 0)
-            clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8,8))
-            enhanced = clahe.apply(blur)
+            # --- Convertir a HSV para detectar azul ---
+            hsv = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2HSV)
+            lower_blue = np.array([100, 80, 50])
+            upper_blue = np.array([140, 255, 255])
+            mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
 
-            meanv = np.mean(enhanced)
-            if meanv < 128:
-                enhanced = cv2.bitwise_not(enhanced)
-
-            # --- Binarización ---
-            binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                        cv2.THRESH_BINARY_INV, 51, 2)
-            kernel = np.ones((2,2), np.uint8)
-            binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
-            binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
-            binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
+            # --- Suavizado + limpieza ---
+            kernel = np.ones((3,3), np.uint8)
+            mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_OPEN, kernel, iterations=2)
+            mask_blue = cv2.morphologyEx(mask_blue, cv2.MORPH_CLOSE, kernel, iterations=1)
+            mask_eroded = cv2.erode(mask_blue, kernel, iterations=p['erosion_iter'])
 
             # --- Distance Transform + Watershed ---
-            dist = cv2.distanceTransform(binary_eroded, cv2.DIST_L2, 5)
-            _, dt_thresh = cv2.threshold(dist, p['dist_threshold']*dist.max(), 255, 0)
+            dist = cv2.distanceTransform(mask_eroded, cv2.DIST_L2, 5)
+            _, dt_thresh = cv2.threshold(dist, p['dist_thresh']*dist.max(), 255, 0)
             dt_thresh = np.uint8(dt_thresh)
             num_labels, labels = cv2.connectedComponents(dt_thresh)
 
@@ -1045,27 +1038,27 @@ class MultiStandardAnalyzer:
             detected_img = img_rgb.copy()
             for colony in colonies:
                 cx, cy = colony['centroid']
-                cv2.drawContours(detected_img, [colony['contour']], -1, (255,0,0), 2)  # azul
+                cv2.drawContours(detected_img, [colony['contour']], -1, (255,0,0), 2)
                 cv2.circle(detected_img, (cx, cy), 4, (255,0,0), -1)
 
-            # --- Debug visual ---
+            # --- Debug ---
             if debug:
                 fig, axes = plt.subplots(1,2,figsize=(12,6))
-                axes[0].imshow(gray, cmap='gray'); axes[0].set_title("Original")
+                axes[0].imshow(cv2.cvtColor(img_rgb, cv2.COLOR_BGR2RGB))
+                axes[0].set_title("Original")
                 axes[1].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
-                axes[1].set_title(f"Colonias reales (azul) - Total: {colonies_count}")
+                axes[1].set_title(f"Colonias azules detectadas: {colonies_count}")
                 for ax in axes: ax.axis('off')
                 plt.tight_layout()
                 st.pyplot(fig)
                 plt.close()
 
-            print(f"🔬 Colonias reales detectadas: {colonies_count}")
-
+            print(f"🔬 Colonias azules reales: {colonies_count}")
             return colonies_count, original_img, detected_img
 
         except Exception as e:
-            print("❌ Error en count_colonies_opencv_streamlit:", e)
-            # Devolver la imagen original en caso de fallo
+            print("❌ Error count_blue_colonies:")
+            traceback.print_exc()
             return 0, original_img, original_img
 
 
