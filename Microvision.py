@@ -1028,33 +1028,33 @@ class MultiStandardAnalyzer:
         # --- PARÁMETROS OPTIMIZADOS POR SENSIBILIDAD ---
         params = {
             'low': {
-                'min_area': 40, 'max_area': 5000,
-                'min_circularity': 0.45,
-                'min_contrast': 10,
-                'min_std': 2.0, 'max_std': 35,
-                'erosion_iter': 2,
-                'dist_threshold': 0.25,
-                'min_solidity': 0.50
+                'min_area': 30, 'max_area': 8000,
+                'min_circularity': 0.30,
+                'min_contrast': 5,
+                'min_std': 1.0, 'max_std': 50,
+                'erosion_iter': 1,
+                'dist_threshold': 0.20,
+                'min_solidity': 0.35
             },
 
             'medium': {
-                'min_area': 30, 'max_area': 6000,
-                'min_circularity': 0.42,
-                'min_contrast': 8,
-                'min_std': 1.8, 'max_std': 38,
-                'erosion_iter': 2,
-                'dist_threshold': 0.22,
-                'min_solidity': 0.48
+                'min_area': 20, 'max_area': 9000,
+                'min_circularity': 0.25,
+                'min_contrast': 4,
+                'min_std': 0.8, 'max_std': 55,
+                'erosion_iter': 1,
+                'dist_threshold': 0.18,
+                'min_solidity': 0.30
             },
 
             'high': {
-                'min_area': 20, 'max_area': 7000,
-                'min_circularity': 0.38,
-                'min_contrast': 6,
-                'min_std': 1.5, 'max_std': 40,
+                'min_area': 15, 'max_area': 10000,
+                'min_circularity': 0.20,
+                'min_contrast': 3,
+                'min_std': 0.5, 'max_std': 60,
                 'erosion_iter': 1,
-                'dist_threshold': 0.20,
-                'min_solidity': 0.45
+                'dist_threshold': 0.15,
+                'min_solidity': 0.25
             }
         }
 
@@ -1197,13 +1197,13 @@ class MultiStandardAnalyzer:
                 rejected_info.append(f"M{marker}: área {area:.0f}")
                 continue
             
-            # Filtro 2: Intensidad (rango permisivo)
+            # Filtro 2: Intensidad (MUY PERMISIVO)
             mean_int = cv2.mean(enhanced, mask=mask)[0]
-            if mean_int < 15 or mean_int > 250:
+            if mean_int < 5 or mean_int > 252:
                 rejected_info.append(f"M{marker}: intensidad {mean_int:.0f}")
                 continue
             
-            # Filtro 3: Contraste local MEJORADO
+            # Filtro 3: Contraste local (OPCIONAL - solo si hay background)
             x, y, w_box, h_box = cv2.boundingRect(cnt)
             margin = 20
             y1 = max(0, y - margin)
@@ -1216,11 +1216,12 @@ class MultiStandardAnalyzer:
             cnt_shifted = cnt - [x1, y1]
             cv2.drawContours(mask_roi, [cnt_shifted], -1, 255, -1)
             
-            # Calcular contraste
+            # Calcular contraste solo si hay suficiente background
             bg_mask = cv2.bitwise_not(mask_roi)
             bg_pixels = cv2.countNonZero(bg_mask)
             
-            if bg_pixels > 15:  # Hay suficiente background
+            contrast = 999  # Por defecto, pasa el filtro
+            if bg_pixels > 15:
                 mean_colony = cv2.mean(roi_around, mask=mask_roi)[0]
                 mean_background = cv2.mean(roi_around, mask=bg_mask)[0]
                 contrast = abs(mean_colony - mean_background)
@@ -1252,16 +1253,16 @@ class MultiStandardAnalyzer:
                 rejected_info.append(f"M{marker}: solid {solidity:.2f}")
                 continue
             
-            # Filtro 7: Aspect Ratio (permisivo)
+            # Filtro 7: Aspect Ratio (MUY PERMISIVO)
             aspect_ratio = w_box / h_box if h_box > 0 else 0
-            if aspect_ratio > 3.5 or aspect_ratio < 0.28:
+            if aspect_ratio > 5.0 or aspect_ratio < 0.2:
                 rejected_info.append(f"M{marker}: aspect {aspect_ratio:.2f}")
                 continue
             
-            # Filtro 8: Extent (permisivo)
+            # Filtro 8: Extent (MUY PERMISIVO)
             rect_area = w_box * h_box
             extent = area / rect_area if rect_area > 0 else 0
-            if extent < 0.25:
+            if extent < 0.15:
                 rejected_info.append(f"M{marker}: extent {extent:.2f}")
                 continue
             
@@ -1339,15 +1340,20 @@ class MultiStandardAnalyzer:
             plt.close()
 
         if len(rejected_info) > 0:
-            print(f"\n📊 Rechazadas: {len(rejected_info)}")
-            for info in rejected_info[:20]:
-                print(f"   {info}")
+            print(f"\n📊 ANÁLISIS DE RECHAZOS:")
+            print(f"   Total rechazadas: {len(rejected_info)}")
+            print(f"   Mostrando primeras 30:")
+            for info in rejected_info[:30]:
+                print(f"   ❌ {info}")
 
         print(f"\n{'='*60}")
-        print(f"🔬 Colonias detectadas: {colonies_count}")
+        print(f"🔬 RESULTADO FINAL:")
+        print(f"   Colonias VÁLIDAS: {colonies_count}")
         print(f"   Sensibilidad: {sensitivity}")
-        print(f"   Regiones watershed: {num_labels - 1}")
-        print(f"   Filtradas: {num_labels - 1 - colonies_count}")
+        print(f"   Regiones watershed detectadas: {num_labels - 1}")
+        print(f"   Regiones rechazadas: {num_labels - 1 - colonies_count}")
+        if num_labels > 1:
+            print(f"   Tasa de aceptación: {colonies_count/(num_labels-1)*100:.1f}%")
         print(f"{'='*60}\n")
 
         return colonies_count, original_img, detected_img
