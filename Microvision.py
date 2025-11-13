@@ -1017,8 +1017,8 @@ class MultiStandardAnalyzer:
     
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
-        Contador de colonias bacterianas OPTIMIZADO v3
-        Mejoras: Background subtraction + filtro de contraste local + validaciones de forma
+        Contador de colonias bacterianas OPTIMIZADO v4
+        Enfoque adaptativo: detecta automáticamente si colonias son claras u oscuras
         """
         import cv2
         import numpy as np
@@ -1028,42 +1028,33 @@ class MultiStandardAnalyzer:
         # --- PARÁMETROS OPTIMIZADOS POR SENSIBILIDAD ---
         params = {
             'low': {
-                'min_area': 50, 'max_area': 5000,
-                'min_circularity': 0.50,
-                'min_contrast': 15,
-                'min_std': 3.0, 'max_std': 32,
+                'min_area': 40, 'max_area': 5000,
+                'min_circularity': 0.45,
+                'min_contrast': 10,
+                'min_std': 2.0, 'max_std': 35,
                 'erosion_iter': 2,
                 'dist_threshold': 0.25,
-                'min_solidity': 0.55,
-                'min_aspect': 0.35, 'max_aspect': 3.0,
-                'min_extent': 0.35,
-                'min_intensity': 40  # Nuevo: intensidad mínima
+                'min_solidity': 0.50
             },
 
             'medium': {
-                'min_area': 35, 'max_area': 6000,
-                'min_circularity': 0.45,
-                'min_contrast': 12,
-                'min_std': 2.5, 'max_std': 35,
+                'min_area': 30, 'max_area': 6000,
+                'min_circularity': 0.42,
+                'min_contrast': 8,
+                'min_std': 1.8, 'max_std': 38,
                 'erosion_iter': 2,
                 'dist_threshold': 0.22,
-                'min_solidity': 0.50,
-                'min_aspect': 0.3, 'max_aspect': 3.2,
-                'min_extent': 0.32,
-                'min_intensity': 35
+                'min_solidity': 0.48
             },
 
             'high': {
-                'min_area': 25, 'max_area': 7000,
-                'min_circularity': 0.40,
-                'min_contrast': 10,
-                'min_std': 2.0, 'max_std': 38,
+                'min_area': 20, 'max_area': 7000,
+                'min_circularity': 0.38,
+                'min_contrast': 6,
+                'min_std': 1.5, 'max_std': 40,
                 'erosion_iter': 1,
                 'dist_threshold': 0.20,
-                'min_solidity': 0.45,
-                'min_aspect': 0.3, 'max_aspect': 3.5,
-                'min_extent': 0.30,
-                'min_intensity': 30
+                'min_solidity': 0.45
             }
         }
 
@@ -1109,52 +1100,57 @@ class MultiStandardAnalyzer:
             else:
                 plate_mask[:] = 255
 
-        # --- 3️⃣ Preprocesamiento mejorado con Background Subtraction ---
+        # --- 3️⃣ Preprocesamiento con Background Subtraction ---
         try:
             masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
             denoised = cv2.bilateralFilter(masked, 7, 50, 50)
-            clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(denoised)
 
-            # 🆕 BACKGROUND SUBTRACTION para eliminar fondo irregular
-            kernel_bg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
+            # Background subtraction suave
+            kernel_bg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (45, 45))
             background = cv2.morphologyEx(enhanced, cv2.MORPH_OPEN, kernel_bg)
             enhanced = cv2.subtract(enhanced, background)
             enhanced = cv2.normalize(enhanced, None, 0, 255, cv2.NORM_MINMAX)
         except Exception as e:
             print(f"⚠️ Error en preprocesamiento: {e}")
-            # Fallback: usar enhanced sin background subtraction
             masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
             denoised = cv2.bilateralFilter(masked, 7, 50, 50)
-            clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(denoised)
             background = enhanced.copy()
 
-        # --- 4️⃣ Binarización BALANCEADA ---
+        # --- 4️⃣ Binarización TRIPLE con votación ---
+        # Detectar si colonias son claras u oscuras
         meanv = np.mean(enhanced[plate_mask > 0])
-        if meanv < 128:
-            enhanced = cv2.bitwise_not(enhanced)
-
+        
         # Método 1: Adaptativo Gaussiano
         binary1 = cv2.adaptiveThreshold(
             enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV, 61, 3
+            cv2.THRESH_BINARY_INV, 51, 3
         )
 
-        # Método 2: Otsu
+        # Método 2: Adaptativo Mean
+        binary2 = cv2.adaptiveThreshold(
+            enhanced, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV, 51, 3
+        )
+
+        # Método 3: Otsu
         blur_local = cv2.GaussianBlur(enhanced, (5, 5), 0)
-        _, binary2 = cv2.threshold(
+        _, binary3 = cv2.threshold(
             blur_local, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
 
-        # Combinar: intersección de 2 métodos (balance)
-        binary = cv2.bitwise_and(binary1, binary2)
+        # Votación: al menos 2 de 3 métodos deben estar de acuerdo
+        binary_sum = (binary1.astype(float) + binary2.astype(float) + binary3.astype(float)) / 255.0
+        binary = ((binary_sum >= 2.0) * 255).astype(np.uint8)
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
         # --- 5️⃣ Limpieza morfológica ---
         kernel = np.ones((2, 2), np.uint8)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
+        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
 
         # --- 6️⃣ Erosión para separar colonias ---
         binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
@@ -1176,7 +1172,7 @@ class MultiStandardAnalyzer:
         color_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
         cv2.watershed(color_img, markers)
 
-        # --- 8️⃣ Filtrado inteligente con contraste local ---
+        # --- 8️⃣ Filtrado inteligente ADAPTATIVO ---
         valid_colonies = []
         rejected_info = []
         unique_markers = np.unique(markers)
@@ -1201,43 +1197,37 @@ class MultiStandardAnalyzer:
                 rejected_info.append(f"M{marker}: área {area:.0f}")
                 continue
             
-            # Filtro 2: Intensidad promedio (MÁS ESTRICTO)
+            # Filtro 2: Intensidad (rango permisivo)
             mean_int = cv2.mean(enhanced, mask=mask)[0]
-            if mean_int < p['min_intensity'] or mean_int > 240:
+            if mean_int < 15 or mean_int > 250:
                 rejected_info.append(f"M{marker}: intensidad {mean_int:.0f}")
                 continue
             
-            # 🆕 Filtro 3: CONTRASTE LOCAL (más estricto)
+            # Filtro 3: Contraste local MEJORADO
             x, y, w_box, h_box = cv2.boundingRect(cnt)
-            margin = 25  # Aumentado para mejor comparación
+            margin = 20
             y1 = max(0, y - margin)
             y2 = min(h, y + h_box + margin)
             x1 = max(0, x - margin)
             x2 = min(w, x + w_box + margin)
             
             roi_around = enhanced[y1:y2, x1:x2]
-            mask_roi = np.zeros_like(roi_around)
+            mask_roi = np.zeros_like(roi_around, dtype=np.uint8)
             cnt_shifted = cnt - [x1, y1]
             cv2.drawContours(mask_roi, [cnt_shifted], -1, 255, -1)
             
-            # Verificar que hay suficiente background
-            bg_pixels = cv2.countNonZero(cv2.bitwise_not(mask_roi))
-            if bg_pixels < 20:
-                rejected_info.append(f"M{marker}: sin background")
-                continue
+            # Calcular contraste
+            bg_mask = cv2.bitwise_not(mask_roi)
+            bg_pixels = cv2.countNonZero(bg_mask)
             
-            mean_colony = cv2.mean(enhanced, mask=mask)[0]
-            mean_background = cv2.mean(roi_around, mask=cv2.bitwise_not(mask_roi))[0]
-            contrast = abs(mean_colony - mean_background)
-            
-            # Verificar que la colonia sea MÁS BRILLANTE que el fondo
-            if mean_colony <= mean_background:
-                rejected_info.append(f"M{marker}: más oscuro que fondo")
-                continue
-            
-            if contrast < p['min_contrast']:
-                rejected_info.append(f"M{marker}: contraste {contrast:.1f}")
-                continue
+            if bg_pixels > 15:  # Hay suficiente background
+                mean_colony = cv2.mean(roi_around, mask=mask_roi)[0]
+                mean_background = cv2.mean(roi_around, mask=bg_mask)[0]
+                contrast = abs(mean_colony - mean_background)
+                
+                if contrast < p['min_contrast']:
+                    rejected_info.append(f"M{marker}: contraste {contrast:.1f}")
+                    continue
             
             # Filtro 4: Desviación estándar
             pixels = enhanced[mask > 0]
@@ -1262,16 +1252,16 @@ class MultiStandardAnalyzer:
                 rejected_info.append(f"M{marker}: solid {solidity:.2f}")
                 continue
             
-            # 🆕 Filtro 7: Aspect Ratio
+            # Filtro 7: Aspect Ratio (permisivo)
             aspect_ratio = w_box / h_box if h_box > 0 else 0
-            if aspect_ratio > p['max_aspect'] or aspect_ratio < p['min_aspect']:
+            if aspect_ratio > 3.5 or aspect_ratio < 0.28:
                 rejected_info.append(f"M{marker}: aspect {aspect_ratio:.2f}")
                 continue
             
-            # 🆕 Filtro 8: Extent (qué tanto llena su bounding box)
+            # Filtro 8: Extent (permisivo)
             rect_area = w_box * h_box
             extent = area / rect_area if rect_area > 0 else 0
-            if extent < p['min_extent']:
+            if extent < 0.25:
                 rejected_info.append(f"M{marker}: extent {extent:.2f}")
                 continue
             
@@ -1284,8 +1274,7 @@ class MultiStandardAnalyzer:
                     'centroid': (cx_final, cy_final), 
                     'contour': cnt, 
                     'area': area, 
-                    'circularity': circularity,
-                    'contrast': contrast
+                    'circularity': circularity
                 })
 
         colonies_count = len(valid_colonies)
@@ -1315,13 +1304,13 @@ class MultiStandardAnalyzer:
             axes[0, 0].set_title("1. Original")
             
             axes[0, 1].imshow(background, cmap='gray')
-            axes[0, 1].set_title("2. Background estimado")
+            axes[0, 1].set_title("2. Background")
             
             axes[0, 2].imshow(enhanced, cmap='gray')
-            axes[0, 2].set_title("3. Enhanced (bg subtracted)")
+            axes[0, 2].set_title("3. Enhanced")
             
             axes[1, 0].imshow(binary, cmap='gray')
-            axes[1, 0].set_title("4. Binaria mejorada")
+            axes[1, 0].set_title(f"4. Binaria (votación 2/3)")
             
             axes[1, 1].imshow(dist_transform, cmap='jet')
             axes[1, 1].set_title("5. Distance Transform")
