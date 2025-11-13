@@ -784,6 +784,9 @@ class MultiStandardAnalyzer:
     
 
     
+
+
+    
     
     def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
     
@@ -820,7 +823,6 @@ class MultiStandardAnalyzer:
             mm_per_pixel = diametro_real_mm / (2 * r_petri)
 
         # --- Detectar textil (zona central blanca) ---
-        # Usamos un umbral alto + morfología para detectar la tela (zona clara)
         _, mask_textil = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
         mask_textil = cv2.morphologyEx(mask_textil, cv2.MORPH_CLOSE,
                                     cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)), iterations=2)
@@ -830,73 +832,61 @@ class MultiStandardAnalyzer:
             (x_t, y_t), r_textil = cv2.minEnclosingCircle(cnt)
             cx_textil, cy_textil, r_textil = int(x_t), int(y_t), int(r_textil)
         else:
-            # Fallback razonable
             cx_textil, cy_textil, r_textil = cx_petri, cy_petri, int(r_petri * 0.08)
             cv2.circle(mask_textil, (cx_textil, cy_textil), r_textil, 255, -1)
 
-        # Si el textil detectado es sospechosamente grande, corregir
         if r_textil > r_petri * 0.6:
             r_textil = int(r_petri * 0.1)
 
         # --- Detección mejorada de crecimiento ---
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-        # Máscara de verde (ajustable)
         lower_green = np.array([35, 40, 40])
         upper_green = np.array([90, 255, 255])
         mask_green = cv2.inRange(hsv, lower_green, upper_green)
 
-        # Zona anular entre textil y borde para detectar manchas oscuras con umbral adaptativo
         mask_ring = np.zeros_like(gray)
         cv2.circle(mask_ring, (cx_textil, cy_textil), int(r_petri - 6), 255, -1)
         cv2.circle(mask_ring, (cx_textil, cy_textil), int(r_textil + 3), 0, -1)
         ring_pixels = cv2.bitwise_and(gray, gray, mask=mask_ring)
 
-        # Umbral adaptativo en la zona anular (más robusto que un umbral fijo)
-        # Convertir a 8-bit si es necesario (ya lo es)
         th_ring = cv2.adaptiveThreshold(ring_pixels, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                         cv2.THRESH_BINARY_INV, 51, 7)
 
-        # Combinar detecciones
         mask_growth = cv2.bitwise_or(mask_green, th_ring)
-
-        # Aplicar máscara de Petri y excluir textil
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
         mask_growth[mask_textil > 0] = 0
 
-        # Limpiar ruido y filtrar por área
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=2)
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_OPEN, kernel, iterations=1)
 
-        # Filtrar componentes pequeños y quitar regiones que cubren casi toda la placa
         contours_g, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_growth_filtered = np.zeros_like(mask_growth)
         petri_area = np.pi * (r_petri ** 2)
         for c in contours_g:
             area = cv2.contourArea(c)
-            if area < 50:  # area mínima (ajustable)
+            if area < 50:
                 continue
-            # Si la región cubre >70% de la placa, descartarla (probablemente segmentación errónea)
             if area > 0.7 * petri_area:
                 continue
             cv2.drawContours(mask_growth_filtered, [c], -1, 255, -1)
         mask_growth = mask_growth_filtered
 
-        # --- Calcular halo radial desde borde del textil ---
+        # --- CÁLCULO CORREGIDO: Halo de inhibición promedio según AATCC TM147 ---
         halo_mask = np.zeros_like(gray)
         halo_dists = []
         angles_with_growth = 0
 
-        # Precalcular rango radial
         r_min = int(r_textil) + 5
         r_max = int(r_petri) - 6
 
         if r_min >= r_max:
-            # No hay espacio para medir
+            avg_halo_mm = 0.0
             if debug:
                 print("Advertencia: r_min >= r_max, imposible medir halo.")
         else:
+            # Medir en 360 direcciones radiales
             for angle in np.linspace(0, 2 * np.pi, 360, endpoint=False):
                 found = False
                 for r in range(r_min, r_max):
@@ -905,50 +895,52 @@ class MultiStandardAnalyzer:
                     if x < 0 or y < 0 or x >= w or y >= h:
                         break
                     if mask_growth[y, x] > 0:
+                        # Encontró crecimiento: medir distancia de inhibición
                         dist_mm = (r - r_textil) * mm_per_pixel
                         halo_dists.append(dist_mm)
                         angles_with_growth += 1
-                        # dibujar linea
+                        # Dibujar línea de inhibición
                         x_start = int(cx_textil + r_textil * np.cos(angle))
                         y_start = int(cy_textil + r_textil * np.sin(angle))
                         cv2.line(halo_mask, (x_start, y_start), (x, y), 255, 1)
                         found = True
                         break
-                # Si no encontró crecimiento: no agregar valor (evitar sesgar con máximos)
-                # (opcional: podrías añadir un valor máximo, pero solo si la segmentación es fiable)
+                
+                # Si NO encontró crecimiento: inhibición completa hasta el borde
+                # (según AATCC TM147, esto cuenta como inhibición máxima)
+                if not found:
+                    dist_mm = (r_max - r_textil) * mm_per_pixel
+                    halo_dists.append(dist_mm)
 
-        avg_halo_mm = float(np.mean(halo_dists)) if len(halo_dists) > 0 else 0.0
+            # Promedio del halo de inhibición
+            avg_halo_mm = float(np.mean(halo_dists)) if len(halo_dists) > 0 else 0.0
+
         measurements = halo_dists.copy()
 
         # --- Preparar overlay (colores en BGR) ---
         overlay = img.copy()
-        # textil -> rojo claro (BGR)
-        overlay[mask_textil > 0] = (60, 60, 220)
-        # crecimiento -> verde claro
-        overlay[mask_growth > 0] = (60, 220, 60)
-        # halo lines -> naranja
-        overlay[halo_mask > 0] = (40, 150, 255)
+        overlay[mask_textil > 0] = (60, 60, 220)  # textil -> rojo claro
+        overlay[mask_growth > 0] = (60, 220, 60)  # crecimiento -> verde claro
+        overlay[halo_mask > 0] = (40, 150, 255)   # líneas de halo -> naranja
 
-        # crear inhibición (entre textil y crecimiento) usando avg_halo
+        # Zona de inhibición (visual)
         if avg_halo_mm > 0:
             radius_inhibition_px = int(r_textil + (avg_halo_mm / mm_per_pixel))
             mask_inhibition = np.zeros_like(gray)
             cv2.circle(mask_inhibition, (cx_textil, cy_textil), radius_inhibition_px, 255, -1)
             mask_inhibition[mask_textil > 0] = 0
             mask_inhibition[mask_growth > 0] = 0
-            # amarillo claro
-            overlay[mask_inhibition > 0] = (150, 255, 255)
+            overlay[mask_inhibition > 0] = (150, 255, 255)  # amarillo claro
 
-        # Mezclar
         overlay_final = cv2.addWeighted(img, 0.6, overlay, 0.4, 0)
         overlay_final = cv2.bitwise_and(overlay_final, overlay_final, mask=mask_petri)
 
-        # Dibujar referencia textil
-        cv2.circle(overlay_final, (cx_textil, cy_textil), int(r_textil), (0, 0, 255), 2)  # rojo BGR
+        # Referencia del textil
+        cv2.circle(overlay_final, (cx_textil, cy_textil), int(r_textil), (0, 0, 255), 2)
 
-        # Texto
+        # Texto con resultado
         if avg_halo_mm > 0:
-            text = f"Halo: {avg_halo_mm:.2f} mm"
+            text = f"Halo Inhibicion: {avg_halo_mm:.2f} mm"
             text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)[0]
             cv2.rectangle(overlay_final, (5, 5), (text_size[0] + 15, 35), (0, 0, 0), -1)
             cv2.putText(overlay_final, text, (10, 27), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -957,18 +949,16 @@ class MultiStandardAnalyzer:
             print(f"mm_per_pixel = {mm_per_pixel:.6f}")
             print(f"r_textil = {r_textil}px, r_petri = {r_petri}px")
             print(f"Ángulos con crecimiento: {angles_with_growth}/360")
-            print(f"Mediciones: {len(measurements)} promedio = {avg_halo_mm:.2f} mm")
-            # Retornar máscaras para debugging visual (puedes guardarlas o mostrarlas)
+            print(f"Ángulos sin crecimiento (inhibición completa): {360 - angles_with_growth}/360")
+            print(f"Mediciones totales: {len(measurements)}")
+            print(f"Halo de inhibición promedio: {avg_halo_mm:.2f} mm")
             return mask_textil, mask_growth, avg_halo_mm, overlay_final, measurements, (cx_textil, cy_textil, r_textil), {
-                'mask_petri': mask_petri, 'mask_inhibition': (mask_inhibition if avg_halo_mm>0 else np.zeros_like(gray)),
+                'mask_petri': mask_petri, 
+                'mask_inhibition': (mask_inhibition if avg_halo_mm>0 else np.zeros_like(gray)),
                 'halo_mask': halo_mask
             }
 
-        # return estándar (6 valores)
         return mask_textil, mask_growth, avg_halo_mm, overlay_final, measurements, (cx_textil, cy_textil, r_textil)
-
-
-
 
     
 
