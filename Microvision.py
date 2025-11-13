@@ -886,29 +886,28 @@ class MultiStandardAnalyzer:
         mask_growth = mask_growth_filtered
 
         # ============================
-        #   MEDICIÓN SOLO EN LÍNEAS
+        #   MEDICIÓN SOLO EN LÍNEAS LATERALES
         # ============================
         halo_dists = []
         line_measurements = []
+
         contours_f, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         for c in contours_f:
             x, y, w_c, h_c = cv2.boundingRect(c)
 
-            # Filtrar ruído
+            # Filtrar ruido
             if w_c < 25 and h_c < 25:
                 continue
 
             cx_line = x + w_c // 2
             cy_line = y + h_c // 2
 
-            # Determinar orientación
+            # Determinar si la línea es horizontal o vertical
             if w_c > h_c:
-                # línea horizontal
-                dirs = [(-1, 0), (1, 0)]
+                dirs = [(-1, 0), (1, 0)]  # Horizontal
             else:
-                # línea vertical
-                dirs = [(0, -1), (0, 1)]
+                dirs = [(0, -1), (0, 1)]  # Vertical
 
             halo_line = []
 
@@ -922,10 +921,22 @@ class MultiStandardAnalyzer:
                         break
 
                     if mask_growth[py, px] > 0:
-                        # Distancia desde el borde del textil
-                        dist_px = np.sqrt((px - cx_textil)**2 + (py - cy_textil)**2) - r_textil
-                        halo_mm = dist_px * mm_per_pixel
 
+                        # ==========================================
+                        # CORRECCIÓN: Medir desde BORDE del textil
+                        # ==========================================
+                        if cx_line < cx_textil:  
+                            borde = cx_textil - r_textil
+                            dist_px = abs(px - borde)
+
+                        elif cx_line > cx_textil:  
+                            borde = cx_textil + r_textil
+                            dist_px = abs(px - borde)
+
+                        else:
+                            dist_px = 0
+
+                        halo_mm = dist_px * mm_per_pixel
                         halo_line.append(halo_mm)
                         halo_dists.append(halo_mm)
                         break
@@ -935,7 +946,6 @@ class MultiStandardAnalyzer:
             if halo_line:
                 line_measurements.append(float(np.mean(halo_line)))
 
-        # Halo promedio final
         avg_halo_mm = float(np.mean(line_measurements)) if len(line_measurements) > 0 else 0.0
 
         # ============================
@@ -948,10 +958,8 @@ class MultiStandardAnalyzer:
         overlay_final = cv2.addWeighted(img, 0.6, overlay, 0.4, 0)
         overlay_final = cv2.bitwise_and(overlay_final, overlay_final, mask=mask_petri)
 
-        # Dibujar textil
         cv2.circle(overlay_final, (cx_textil, cy_textil), int(r_textil), (0, 0, 255), 2)
 
-        # Texto
         if avg_halo_mm > 0:
             text = f"Halo Inhibición: {avg_halo_mm:.2f} mm"
             cv2.putText(overlay_final, text, (10, 27), cv2.FONT_HERSHEY_SIMPLEX,
@@ -962,9 +970,6 @@ class MultiStandardAnalyzer:
             print("Halo promedio:", avg_halo_mm)
 
         return mask_textil, mask_growth, avg_halo_mm, overlay_final, line_measurements, (cx_textil, cy_textil, r_textil)
-
-
-
 
     
     
