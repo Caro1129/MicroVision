@@ -1073,7 +1073,7 @@ class MultiStandardAnalyzer:
         
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
-        # --- 5️⃣ Limpieza morfológica BALANCEADA ---
+        # --- 5️⃣ Limpieza morfológica + separación inteligente ---
         kernel = np.ones((2, 2), np.uint8)
         
         # Apertura suave
@@ -1082,18 +1082,22 @@ class MultiStandardAnalyzer:
         # Cierre para unir fragmentos
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
         
-        # Erosión MÍNIMA solo si el parámetro lo indica
-        if p['erosion_iter'] > 0:
-            binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
-        else:
-            binary_eroded = binary.copy()
+        # Para separar colonias pegadas: erosión + dilatación selectiva
+        binary_eroded = cv2.erode(binary, kernel, iterations=2)  # Aumentado a 2
         
-        # --- 6️⃣ Distance Transform BALANCEADO ---
+        # --- 6️⃣ Distance Transform MEJORADO ---
         dist = cv2.distanceTransform(binary_eroded, cv2.DIST_L2, 5)
         
-        # Umbral dinámico basado en el parámetro
-        _, sure_fg = cv2.threshold(dist, p['dist_threshold'] * dist.max(), 255, 0)
+        # Suavizar distance transform para evitar ruido
+        dist_smooth = cv2.GaussianBlur(dist, (5, 5), 0)
+        
+        # Umbral adaptativo más bajo para detectar más centros
+        threshold_val = p['dist_threshold'] * dist_smooth.max()
+        _, sure_fg = cv2.threshold(dist_smooth, threshold_val, 255, 0)
         sure_fg = np.uint8(sure_fg)
+        
+        # Dilatar ligeramente los centros para unir fragmentos muy cercanos
+        sure_fg = cv2.dilate(sure_fg, kernel, iterations=1)
         
         # --- 7️⃣ Análisis de componentes conectados ---
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(sure_fg, connectivity=8)
@@ -1107,9 +1111,10 @@ class MultiStandardAnalyzer:
         color_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
         markers = cv2.watershed(color_img, markers)
         
-        # --- 9️⃣ Filtrado ULTRA ESTRICTO ---
+        # --- 9️⃣ Filtrado INTELIGENTE con detección de colonias múltiples ---
         valid_centroids = []
         valid_contours = []
+        rejected_reasons = []  # Para debug
         
         for label in range(1, num_labels):
             # Crear máscara de la región
@@ -1118,51 +1123,66 @@ class MultiStandardAnalyzer:
             if cv2.countNonZero(mask) == 0:
                 continue
             
-            # Encontrar contorno
-            contours_region, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # Encontrar contorno en la imagen ORIGINAL (no erosionada) para mejor área
+            mask_original = np.zeros_like(gray, dtype=np.uint8)
+            cv2.floodFill(binary, mask_original, tuple(centroids[label].astype(int)), 255)
+            
+            contours_region, _ = cv2.findContours(mask_original, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours_region:
+                rejected_reasons.append(f"Label {label}: No contour")
                 continue
             
             cnt = max(contours_region, key=cv2.contourArea)
             area = cv2.contourArea(cnt)
             
             # ✅ Filtro 1: Área
-            if area < p['min_area'] or area > p['max_area']:
+            if area < p['min_area']:
+                rejected_reasons.append(f"Label {label}: Área muy pequeña ({area})")
+                continue
+            if area > p['max_area']:
+                rejected_reasons.append(f"Label {label}: Área muy grande ({area})")
                 continue
             
             # ✅ Filtro 2: Intensidad media
-            mean_intensity = cv2.mean(enhanced, mask=mask)[0]
+            mean_intensity = cv2.mean(enhanced, mask=mask_original)[0]
             if not (p['intensity_range'][0] < mean_intensity < p['intensity_range'][1]):
+                rejected_reasons.append(f"Label {label}: Intensidad fuera de rango ({mean_intensity:.1f})")
                 continue
             
-            # ✅ Filtro 3: TEXTURA (desviación estándar) - RELAJADO
-            # Las colonias reales tienen textura, el fondo es uniforme
-            region_pixels = enhanced[mask > 0]
+            # ✅ Filtro 3: TEXTURA mejorada
+            region_pixels = enhanced[mask_original > 0]
             if len(region_pixels) > 5:
                 std_intensity = np.std(region_pixels)
+                
+                # Rechazar si textura es muy uniforme (fondo) o muy ruidosa
                 if std_intensity < p['min_std']:
+                    rejected_reasons.append(f"Label {label}: Textura muy uniforme ({std_intensity:.1f})")
+                    continue
+                if std_intensity > 40:  # NUEVO: rechazar ruido excesivo
+                    rejected_reasons.append(f"Label {label}: Textura muy ruidosa ({std_intensity:.1f})")
                     continue
             
-            # ✅ Filtro 4: Contraste con vecindad - RELAJADO
-            y_coords, x_coords = np.where(mask > 0)
+            # ✅ Filtro 4: Contraste local MEJORADO
+            y_coords, x_coords = np.where(mask_original > 0)
             if len(y_coords) == 0:
                 continue
             
-            y_min = max(0, y_coords.min() - 10)
-            y_max = min(enhanced.shape[0], y_coords.max() + 10)
-            x_min = max(0, x_coords.min() - 10)
-            x_max = min(enhanced.shape[1], x_coords.max() + 10)
+            # Vecindad más grande para mejor contexto
+            y_min = max(0, y_coords.min() - 12)
+            y_max = min(enhanced.shape[0], y_coords.max() + 12)
+            x_min = max(0, x_coords.min() - 12)
+            x_max = min(enhanced.shape[1], x_coords.max() + 12)
             
-            # Crear máscara del anillo exterior
-            mask_expanded = np.zeros_like(mask)
+            mask_expanded = np.zeros_like(mask_original)
             mask_expanded[y_min:y_max, x_min:x_max] = 255
-            mask_ring = cv2.subtract(mask_expanded, mask)
+            mask_ring = cv2.subtract(mask_expanded, mask_original)
             
             if cv2.countNonZero(mask_ring) > 10:
                 mean_neighbor = cv2.mean(enhanced, mask=mask_ring)[0]
                 contrast = abs(mean_intensity - mean_neighbor)
                 
                 if contrast < p['min_contrast']:
+                    rejected_reasons.append(f"Label {label}: Contraste bajo ({contrast:.1f})")
                     continue
             
             # ✅ Filtro 5: Forma
@@ -1172,6 +1192,7 @@ class MultiStandardAnalyzer:
             
             circularity = 4 * np.pi * area / (perimeter ** 2)
             if circularity < p['min_circularity']:
+                rejected_reasons.append(f"Label {label}: Circularidad baja ({circularity:.2f})")
                 continue
             
             # ✅ Filtro 6: Compacidad
@@ -1179,24 +1200,77 @@ class MultiStandardAnalyzer:
             circle_area = np.pi * r * r
             compactness = area / (circle_area + 1e-5)
             
-            if compactness < 0.4:
+            if compactness < 0.35:  # Reducido de 0.4
+                rejected_reasons.append(f"Label {label}: Compacidad baja ({compactness:.2f})")
                 continue
             
             # ✅ Filtro 7: Posición (no en bordes extremos)
             if center and radius:
                 dist_to_center = np.sqrt((x - center[0])**2 + (y - center[1])**2)
                 if dist_to_center > radius * 0.88:
+                    rejected_reasons.append(f"Label {label}: Muy cerca del borde")
                     continue
             
-            # ✅ Filtro 8: Verificar solidez (convex hull) - RELAJADO
+            # ✅ Filtro 8: Solidez
             hull = cv2.convexHull(cnt)
             hull_area = cv2.contourArea(hull)
             if hull_area > 0:
                 solidity = area / hull_area
-                if solidity < 0.5:  # Reducido de 0.7 a 0.5
+                if solidity < 0.5:
+                    rejected_reasons.append(f"Label {label}: Solidez baja ({solidity:.2f})")
                     continue
             
-            # ✅ TODO PASÓ - Es una colonia válida
+            # ⭐ NUEVO: Detectar si es una colonia grande que contiene múltiples colonias
+            avg_colony_area = (p['min_area'] + p['max_area']) / 2
+            
+            if area > avg_colony_area * 2.0 and circularity < 0.7:
+                # Calcular cuántas colonias podría contener
+                estimated_count = int(area / avg_colony_area)
+                estimated_count = max(2, min(estimated_count, 5))  # Entre 2 y 5
+                
+                # Analizar concavidades
+                hull_pts = cv2.convexHull(cnt, returnPoints=False)
+                if len(hull_pts) > 3:
+                    defects = cv2.convexityDefects(cnt, hull_pts)
+                    
+                    if defects is not None and len(defects) >= 2:
+                        # Tiene concavidades significativas -> probablemente múltiples colonias
+                        M = cv2.moments(cnt)
+                        if M["m00"] != 0:
+                            cx_main = int(M["m10"] / M["m00"])
+                            cy_main = int(M["m01"] / M["m00"])
+                            
+                            # Distribuir centroides usando los puntos del contorno
+                            # Encontrar picos de distancia desde el centroide
+                            cnt_points = cnt.reshape(-1, 2)
+                            distances = [np.sqrt((p[0]-cx_main)**2 + (p[1]-cy_main)**2) for p in cnt_points]
+                            
+                            # Usar clustering simple para encontrar sub-regiones
+                            from scipy.ndimage import label as nd_label
+                            
+                            # Crear máscara local y aplicar watershed local
+                            local_mask = mask_original[y_min:y_max, x_min:x_max]
+                            local_dist = cv2.distanceTransform(local_mask, cv2.DIST_L2, 5)
+                            local_dist = cv2.GaussianBlur(local_dist, (5, 5), 0)
+                            
+                            _, local_peaks = cv2.threshold(local_dist, 0.15 * local_dist.max(), 255, 0)
+                            local_peaks = np.uint8(local_peaks)
+                            
+                            n_components, local_labels = cv2.connectedComponents(local_peaks)
+                            
+                            # Agregar un centroide por cada componente
+                            for comp_id in range(1, min(n_components, estimated_count + 1)):
+                                comp_mask = (local_labels == comp_id).astype(np.uint8) * 255
+                                M_local = cv2.moments(comp_mask)
+                                if M_local["m00"] > 0:
+                                    cx_local = int(M_local["m10"] / M_local["m00"]) + x_min
+                                    cy_local = int(M_local["m01"] / M_local["m00"]) + y_min
+                                    valid_centroids.append((cx_local, cy_local))
+                            
+                            valid_contours.append(cnt)
+                            continue
+            
+            # ✅ COLONIA VÁLIDA SIMPLE
             M = cv2.moments(cnt)
             if M["m00"] != 0:
                 cx = int(M["m10"] / M["m00"])
@@ -1267,6 +1341,10 @@ class MultiStandardAnalyzer:
         print(f"   Sensibilidad: {sensitivity}")
         print(f"   Área válida: {p['min_area']}-{p['max_area']} px")
         print(f"   Circularidad mínima: {p['min_circularity']}")
+        if debug and len(rejected_reasons) > 0:
+            print(f"\n📊 Rechazadas: {len(rejected_reasons)} regiones")
+            for reason in rejected_reasons[:10]:  # Mostrar primeras 10
+                print(f"   - {reason}")
         print(f"{'='*60}\n")
 
         return colonies_count, original_img, detected_img
