@@ -1107,16 +1107,25 @@ class MultiStandardAnalyzer:
                 plate_mask[:] = 255
 
         # --- 3️⃣ Preprocesamiento mejorado con Background Subtraction ---
-        masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        denoised = cv2.bilateralFilter(masked, 7, 50, 50)
-        clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(denoised)
+        try:
+            masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+            denoised = cv2.bilateralFilter(masked, 7, 50, 50)
+            clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(denoised)
 
-        # 🆕 BACKGROUND SUBTRACTION para eliminar fondo irregular
-        kernel_bg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
-        background = cv2.morphologyEx(enhanced, cv2.MORPH_OPEN, kernel_bg)
-        enhanced = cv2.subtract(enhanced, background)
-        enhanced = cv2.normalize(enhanced, None, 0, 255, cv2.NORM_MINMAX)
+            # 🆕 BACKGROUND SUBTRACTION para eliminar fondo irregular
+            kernel_bg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
+            background = cv2.morphologyEx(enhanced, cv2.MORPH_OPEN, kernel_bg)
+            enhanced = cv2.subtract(enhanced, background)
+            enhanced = cv2.normalize(enhanced, None, 0, 255, cv2.NORM_MINMAX)
+        except Exception as e:
+            print(f"⚠️ Error en preprocesamiento: {e}")
+            # Fallback: usar enhanced sin background subtraction
+            masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
+            denoised = cv2.bilateralFilter(masked, 7, 50, 50)
+            clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(denoised)
+            background = enhanced.copy()
 
         # --- 4️⃣ Binarización mejorada ---
         meanv = np.mean(enhanced[plate_mask > 0])
@@ -1268,19 +1277,23 @@ class MultiStandardAnalyzer:
         colonies_count = len(valid_colonies)
 
         # --- 9️⃣ Visualización ---
-        detected_img = img_rgb.copy()
-        if center and radius:
-            cv2.circle(detected_img, center, int(radius * 0.91), (255, 255, 0), 2)
-        
-        for i, colony in enumerate(valid_colonies):
-            cx, cy = colony['centroid']
-            cv2.circle(detected_img, (cx, cy), 7, (0, 255, 0), 2)
-            cv2.putText(detected_img, str(i + 1), (cx - 8, cy + 8), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 2)
-        
-        cv2.rectangle(detected_img, (5, 5), (320, 45), (0, 0, 0), -1)
-        cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35), 
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        try:
+            detected_img = img_rgb.copy()
+            if center and radius:
+                cv2.circle(detected_img, center, int(radius * 0.91), (255, 255, 0), 2)
+            
+            for i, colony in enumerate(valid_colonies):
+                cx, cy = colony['centroid']
+                cv2.circle(detected_img, (cx, cy), 7, (0, 255, 0), 2)
+                cv2.putText(detected_img, str(i + 1), (cx - 8, cy + 8), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 2)
+            
+            cv2.rectangle(detected_img, (5, 5), (320, 45), (0, 0, 0), -1)
+            cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        except Exception as e:
+            print(f"⚠️ Error en visualización: {e}")
+            detected_img = img_rgb.copy()
 
         if debug:
             fig, axes = plt.subplots(3, 3, figsize=(18, 12))
@@ -1334,9 +1347,7 @@ class MultiStandardAnalyzer:
         print(f"   Filtradas: {num_labels - 1 - colonies_count}")
         print(f"{'='*60}\n")
 
-        return colonies_count, original_img, detected_i
-
-
+        return colonies_count, original_img, detected_img
 
 
     
