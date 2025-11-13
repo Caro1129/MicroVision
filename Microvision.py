@@ -2886,12 +2886,8 @@ elif st.session_state["pagina"] == "parametros":
                 ctrl_img_rgb, ctrl_pca, ctrl_ms = analyzer.load_and_process_image(control_path)
                 
                 # CONTAR COLONIAS (con debug opcional)
-                ctrl_count, ctrl_original, ctrl_detected = analyzer.count_colonies_opencv(
-                    ctrl_img_rgb, 
-                    ctrl_ms, 
-                    debug=False,
-                    sensitivity='medium'
-                )
+                ctrl_count, ctrl_original, ctrl_detected = analyzer.count_colonies_opencv(img, debug=False)
+
                 
                 # Guardar resultados
                 control_results_list.append({
