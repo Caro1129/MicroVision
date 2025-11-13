@@ -971,12 +971,12 @@ class MultiStandardAnalyzer:
 
 
     
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
+    def count_colonies_opencv_blue(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
-        Contador de colonias bacterianas v3
-        - Cuenta colonias válidas
-        - Detecta y separa colonias pegadas usando watershed local
-        - Evita falsos positivos
+        Conteo de colonias bacterianas reales
+        - Dibuja todas las colonias válidas en azul
+        - Descarta falsos positivos
+        - Separa colonias pegadas
         """
         import cv2
         import numpy as np
@@ -985,15 +985,9 @@ class MultiStandardAnalyzer:
 
         # --- Parámetros según sensibilidad ---
         params = {
-            'low': {'min_area': 45, 'max_area': 4000, 'min_circularity': 0.4,
-                    'min_std': 2.8, 'max_std': 50, 'erosion_iter': 2,
-                    'dist_threshold': 0.22, 'min_solidity': 0.45},
-            'medium': {'min_area': 30, 'max_area': 5500, 'min_circularity': 0.35,
-                    'min_std': 2.3, 'max_std': 55, 'erosion_iter': 2,
-                    'dist_threshold': 0.19, 'min_solidity': 0.42},
-            'high': {'min_area': 20, 'max_area': 7000, 'min_circularity': 0.3,
-                    'min_std': 1.8, 'max_std': 60, 'erosion_iter': 2,
-                    'dist_threshold': 0.17, 'min_solidity': 0.38}
+            'low': {'min_area': 45, 'max_area': 4000, 'erosion_iter': 2, 'dist_threshold': 0.22},
+            'medium': {'min_area': 30, 'max_area': 5500, 'erosion_iter': 2, 'dist_threshold': 0.19},
+            'high': {'min_area': 20, 'max_area': 7000, 'erosion_iter': 2, 'dist_threshold': 0.17}
         }
         p = params.get(sensitivity, params['medium'])
 
@@ -1004,149 +998,68 @@ class MultiStandardAnalyzer:
         else:
             gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
             img_rgb = original_img.copy()
-        h, w = gray.shape
-
-        # --- Detección de placa ---
-        blur = cv2.GaussianBlur(gray, (7,7),0)
-        edges = cv2.Canny(blur,30,100)
-        plate_mask = np.zeros_like(gray, dtype=np.uint8)
-        center, radius = None, None
-
-        # Intentar HoughCircles
-        circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1, minDist=100,
-                                param1=50, param2=30,
-                                minRadius=int(min(h,w)*0.3),
-                                maxRadius=int(min(h,w)*0.55))
-        if circles is not None:
-            circles = np.uint16(np.around(circles))
-            x, y, r = circles[0][0]
-            center = (int(x), int(y)); radius = int(r)
-            cv2.circle(plate_mask, center, int(radius*0.94), 255, -1)
-        else:
-            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            if contours:
-                largest = max(contours, key=cv2.contourArea)
-                (x, y), r = cv2.minEnclosingCircle(largest)
-                if r > 50:
-                    center = (int(x), int(y)); radius = int(r)
-                    cv2.circle(plate_mask, center, int(radius*0.94), 255, -1)
-                else:
-                    plate_mask[:] = 255
-            else:
-                plate_mask[:] = 255
 
         # --- Preprocesamiento ---
-        masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        denoised = cv2.bilateralFilter(masked, 7, 50, 50)
+        blur = cv2.GaussianBlur(gray, (7,7), 0)
         clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8,8))
-        enhanced = clahe.apply(denoised)
+        enhanced = clahe.apply(blur)
+
+        meanv = np.mean(enhanced)
+        if meanv < 128:
+            enhanced = cv2.bitwise_not(enhanced)
 
         # --- Binarización ---
-        meanv = np.mean(enhanced[plate_mask>0])
-        if meanv < 128: enhanced = cv2.bitwise_not(enhanced)
-        binary1 = cv2.adaptiveThreshold(enhanced,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                        cv2.THRESH_BINARY_INV,51,2)
-        binary2 = cv2.adaptiveThreshold(enhanced,255,cv2.ADAPTIVE_THRESH_MEAN_C,
-                                        cv2.THRESH_BINARY_INV,51,2)
-        _, binary3 = cv2.threshold(enhanced,0,255,cv2.THRESH_BINARY_INV+cv2.THRESH_OTSU)
-        binary = ((binary1.astype(float)+binary2.astype(float)+binary3.astype(float))/255 >=2).astype(np.uint8)*255
-        binary = cv2.bitwise_and(binary,binary,mask=plate_mask)
-
-        # --- Morfología ---
+        binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                    cv2.THRESH_BINARY_INV, 51, 2)
         kernel = np.ones((2,2), np.uint8)
         binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=2)
         binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=1)
         binary_eroded = cv2.erode(binary, kernel, iterations=p['erosion_iter'])
 
-        # --- Distance Transform global + Watershed ---
-        dist_transform = cv2.distanceTransform(binary_eroded, cv2.DIST_L2,5)
-        dist_transform = cv2.GaussianBlur(dist_transform,(5,5),0)
-        _, sure_fg = cv2.threshold(dist_transform, p['dist_threshold']*dist_transform.max(),255,0)
-        sure_fg = np.uint8(sure_fg)
-        num_labels, labels_im, stats, centroids = cv2.connectedComponentsWithStats(sure_fg,8)
+        # --- Distance Transform + Watershed ---
+        dist = cv2.distanceTransform(binary_eroded, cv2.DIST_L2, 5)
+        _, dt_thresh = cv2.threshold(dist, p['dist_threshold']*dist.max(), 255, 0)
+        dt_thresh = np.uint8(dt_thresh)
+        num_labels, labels = cv2.connectedComponents(dt_thresh)
 
-        markers = np.zeros_like(gray,dtype=np.int32)
-        for i in range(1,num_labels): markers[labels_im==i]=i
-        sure_bg = cv2.dilate(binary,kernel,iterations=3)
-        unknown = cv2.subtract(sure_bg,sure_fg)
-        markers[unknown==255]=0
-        markers = markers + 1
-        markers[unknown==255]=0
-        color_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
-        cv2.watershed(color_img,markers)
+        colonies = []
+        for i in range(1, num_labels):
+            mask = np.uint8(labels==i)*255
+            if cv2.countNonZero(mask) < p['min_area']:
+                continue
+            contours,_ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                cnt = max(contours, key=cv2.contourArea)
+                M = cv2.moments(cnt)
+                if M["m00"] > 0:
+                    cx = int(M["m10"]/M["m00"])
+                    cy = int(M["m01"]/M["m00"])
+                    colonies.append({'centroid': (cx, cy), 'contour': cnt})
 
-        # --- Filtrado de colonias válidas ---
-        valid_colonies=[]
-        for marker in np.unique(markers):
-            if marker<=1: continue
-            mask = np.uint8(markers==marker)*255
-            if cv2.countNonZero(mask)<10: continue
-            contours,_ = cv2.findContours(mask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-            if not contours: continue
-            cnt = max(contours,key=cv2.contourArea)
-            area = cv2.contourArea(cnt)
-            if area < p['min_area'] or area>p['max_area']: continue
-            perimeter = cv2.arcLength(cnt,True)
-            circularity = 4*np.pi*area/(perimeter**2) if perimeter>0 else 0
-            M = cv2.moments(cnt)
-            if M["m00"]>0:
-                cx=int(M["m10"]/M["m00"])
-                cy=int(M["m01"]/M["m00"])
-                valid_colonies.append({'centroid':(cx,cy),'contour':cnt,'area':area,'circularity':circularity})
+        colonies_count = len(colonies)
 
-        # --- Separar colonias pegadas ---
-        separated_colonies=[]
-        for colony in valid_colonies:
-            if colony['area'] > 1.8*np.mean([c['area'] for c in valid_colonies]) and colony['circularity']<0.6:
-                # Región pegada -> aplicar distance transform local
-                mask = np.zeros_like(gray)
-                cv2.drawContours(mask,[colony['contour']],-1,255,-1)
-                dist = cv2.distanceTransform(mask,cv2.DIST_L2,5)
-                _, dt_thresh = cv2.threshold(dist,0.5*dist.max(),255,0)
-                dt_thresh = np.uint8(dt_thresh)
-                num, labels = cv2.connectedComponents(dt_thresh)
-                for i in range(1,num):
-                    submask = np.uint8(labels==i)*255
-                    contours,_ = cv2.findContours(submask,cv2.RETR_EXTERNAL,cv2.CHAIN_APPROX_SIMPLE)
-                    if contours:
-                        cnt_sub = max(contours,key=cv2.contourArea)
-                        M = cv2.moments(cnt_sub)
-                        if M["m00"]>0:
-                            cx=int(M["m10"]/M["m00"])
-                            cy=int(M["m01"]/M["m00"])
-                            separated_colonies.append({'centroid':(cx,cy),'contour':cnt_sub})
-            else:
-                separated_colonies.append(colony)
-
-        colonies_count = len(separated_colonies)
-
-        # --- Dibujar resultados ---
+        # --- Dibujar colonias en azul ---
         detected_img = img_rgb.copy()
-        for colony in separated_colonies:
+        for colony in colonies:
             cx, cy = colony['centroid']
-            cv2.circle(detected_img,(cx,cy),7,(0,255,0),2)
-        # Resaltar originales pegadas antes de separación (opcional)
-        for colony in valid_colonies:
-            if colony['area'] > 1.8*np.mean([c['area'] for c in valid_colonies]) and colony['circularity']<0.6:
-                cx,cy = colony['centroid']
-                cv2.circle(detected_img,(cx,cy),10,(0,0,255),2)
-                cv2.putText(detected_img,'x',(cx-5,cy+5),cv2.FONT_HERSHEY_SIMPLEX,0.6,(0,0,255),2)
+            cv2.drawContours(detected_img, [colony['contour']], -1, (255,0,0), 2)  # azul
+            cv2.circle(detected_img, (cx, cy), 4, (255,0,0), -1)
 
-        print(f"🔬 Colonias detectadas (incluyendo separadas): {colonies_count}")
+        print(f"🔬 Colonias reales detectadas: {colonies_count}")
 
         # --- Debug visual ---
         if debug:
-            fig,axes = plt.subplots(1,3,figsize=(18,6))
-            axes[0].imshow(gray,cmap='gray'); axes[0].set_title("Original")
-            axes[1].imshow(binary,cmap='gray'); axes[1].set_title("Binaria")
-            axes[2].imshow(cv2.cvtColor(detected_img,cv2.COLOR_BGR2RGB))
-            axes[2].set_title("Colonias detectadas")
+            fig, axes = plt.subplots(1,2,figsize=(12,6))
+            axes[0].imshow(gray, cmap='gray'); axes[0].set_title("Original")
+            axes[1].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
+            axes[1].set_title(f"Colonias reales (azul) - Total: {colonies_count}")
             for ax in axes: ax.axis('off')
             plt.tight_layout()
             st.pyplot(fig)
             plt.close()
 
         return colonies_count, original_img, detected_img
+
 
 
 
