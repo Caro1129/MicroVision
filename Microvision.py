@@ -790,9 +790,6 @@ class MultiStandardAnalyzer:
     
     def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
 
-        # ============================
-        #   PREPROCESAMIENTO INICIAL
-        # ============================
         img = orig_img.copy()
         if img is None:
             raise ValueError("Imagen nula")
@@ -826,28 +823,36 @@ class MultiStandardAnalyzer:
         if r_petri > 0:
             mm_per_pixel = diametro_real_mm / (2 * r_petri)
 
-        # ============================
-        #   DETECCIÓN DEL TEXTIL
-        # ============================
+        # DETECCIÓN DEL TEXTIL
         _, mask_textil = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
         mask_textil = cv2.morphologyEx(mask_textil, cv2.MORPH_CLOSE,
                                     cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)), iterations=2)
-        contours, _ = cv2.findContours(mask_textil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        contours_textil, _ = cv2.findContours(mask_textil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        if contours:
-            cnt = max(contours, key=cv2.contourArea)
-            (x_t, y_t), r_textil = cv2.minEnclosingCircle(cnt)
+        if contours_textil:
+            cnt_textil = max(contours_textil, key=cv2.contourArea)
+            (x_t, y_t), r_textil = cv2.minEnclosingCircle(cnt_textil)
             cx_textil, cy_textil, r_textil = int(x_t), int(y_t), int(r_textil)
+            # bounding box real del textil (útil para medir lateralmente)
+            x1_textil, y1_textil, w_textil, h_textil = cv2.boundingRect(cnt_textil)
+            x2_textil = x1_textil + w_textil
+            y2_textil = y1_textil + h_textil
         else:
+            # fallback: usar círculo/centro
             cx_textil, cy_textil, r_textil = cx_petri, cy_petri, int(r_petri * 0.08)
+            x1_textil = max(0, int(cx_textil - r_textil))
+            y1_textil = max(0, int(cy_textil - r_textil))
+            x2_textil = min(w - 1, int(cx_textil + r_textil))
+            y2_textil = min(h - 1, int(cy_textil + r_textil))
             cv2.circle(mask_textil, (cx_textil, cy_textil), r_textil, 255, -1)
 
         if r_textil > r_petri * 0.6:
             r_textil = int(r_petri * 0.1)
+            # actualizar bbox en caso de ajuste extremo
+            x1_textil = max(0, int(cx_textil - r_textil))
+            x2_textil = min(w - 1, int(cx_textil + r_textil))
 
-        # ============================
-        #   DETECCIÓN DE CRECIMIENTO
-        # ============================
+        # DETECCIÓN DE CRECIMIENTO (igual que antes)
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         lower_green = np.array([35, 40, 40])
         upper_green = np.array([90, 255, 255])
@@ -885,81 +890,80 @@ class MultiStandardAnalyzer:
 
         mask_growth = mask_growth_filtered
 
-        # ============================
-        #   MEDICIÓN SOLO EN LÍNEAS LATERALES
-        # ============================
-        halo_dists = []
+        # MEDICIÓN SOLO EN LÍNEAS LATERALES (CORREGIDO: distancia mínima al borde del textil)
         line_measurements = []
+        measurement_visuals = []  # guardamos pares (punto borde, punto filamento) para dibujar
 
         contours_f, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
         for c in contours_f:
             x, y, w_c, h_c = cv2.boundingRect(c)
-
-            # Filtrar ruido
-            if w_c < 25 and h_c < 25:
+            if w_c < 12 and h_c < 12:
                 continue
 
-            cx_line = x + w_c // 2
-            cy_line = y + h_c // 2
-
-            # Determinar si la línea es horizontal o vertical
-            if w_c > h_c:
-                dirs = [(-1, 0), (1, 0)]  # Horizontal
+            # centroid del filamento (aprox)
+            M = cv2.moments(c)
+            if M["m00"] != 0:
+                cx_line = int(M["m10"] / M["m00"])
+                cy_line = int(M["m01"] / M["m00"])
             else:
-                dirs = [(0, -1), (0, 1)]  # Vertical
+                cx_line = x + w_c // 2
+                cy_line = y + h_c // 2
 
-            halo_line = []
+            pts = c.reshape(-1, 2)  # lista de puntos del contorno
 
-            for dx, dy in dirs:
-                r = 0
-                while True:
-                    px = int(cx_line + dx * r)
-                    py = int(cy_line + dy * r)
+            # decidir lado: izquierda si el centro del filamento está a la izquierda del centro del textil
+            if cx_line < cx_textil:
+                # lado izquierdo: distancia horizontal mínima desde el borde izquierdo del textil (x1_textil) hasta los puntos del filamento
+                d_px_arr = pts[:, 0].astype(np.float32) - float(x1_textil)
+                # descartamos valores negativos (puntos del filamento que queden dentro del textil, si existieran)
+                d_px_arr = d_px_arr[d_px_arr >= 0]
+                if d_px_arr.size == 0:
+                    continue
+                min_dx = float(np.min(d_px_arr))
+                halo_mm = min_dx * mm_per_pixel
+                # punto filamento más cercano
+                idx = np.argmin(pts[:, 0] - x1_textil + np.abs(pts[:,1]-cy_line)*0.001)  # priorizar x luego y
+                pt_fil = tuple(pts[idx].tolist())
+                pt_borde = (x1_textil, int(pt_fil[1]))
+            else:
+                # lado derecho: distancia horizontal mínima desde puntos del filamento hasta borde derecho x2_textil
+                d_px_arr = float(x2_textil) - pts[:, 0].astype(np.float32)
+                d_px_arr = d_px_arr[d_px_arr >= 0]
+                if d_px_arr.size == 0:
+                    continue
+                min_dx = float(np.min(d_px_arr))
+                halo_mm = min_dx * mm_per_pixel
+                idx = np.argmin(x2_textil - pts[:, 0] + np.abs(pts[:,1]-cy_line)*0.001)
+                pt_fil = tuple(pts[idx].tolist())
+                pt_borde = (x2_textil, int(pt_fil[1]))
 
-                    if px < 0 or py < 0 or px >= w or py >= h:
-                        break
+            # Asegurar no-negativo y límite norma
+            halo_mm = max(0.0, halo_mm)
+            halo_mm = min(halo_mm, 8.0)
 
-                    if mask_growth[py, px] > 0:
+            line_measurements.append(float(halo_mm))
+            measurement_visuals.append((pt_borde, pt_fil, halo_mm))
 
-                        # ==========================================
-                        # CORRECCIÓN: Medir desde BORDE del textil
-                        # ==========================================
-                        if cx_line < cx_textil:  
-                            borde = cx_textil - r_textil
-                            dist_px = abs(px - borde)
-
-                        elif cx_line > cx_textil:  
-                            borde = cx_textil + r_textil
-                            dist_px = abs(px - borde)
-
-                        else:
-                            dist_px = 0
-
-                        halo_mm = dist_px * mm_per_pixel
-                        halo_line.append(halo_mm)
-                        halo_dists.append(halo_mm)
-                        break
-
-                    r += 1
-
-            if halo_line:
-                line_measurements.append(float(np.mean(halo_line)))
-
+        # Promedio final (si no hay mediciones -> 0)
         avg_halo_mm = float(np.mean(line_measurements)) if len(line_measurements) > 0 else 0.0
 
-        # ============================
-        #   GENERACIÓN DEL OVERLAY
-        # ============================
+        # GENERACIÓN DEL OVERLAY (dibujar mediciones)
         overlay = img.copy()
         overlay[mask_textil > 0] = (60, 60, 220)
         overlay[mask_growth > 0] = (60, 220, 60)
 
+        # Dibujo de cada línea medida (borde -> filamento) y texto con valor
+        for (pt_borde, pt_fil, hm) in measurement_visuals:
+            cv2.line(overlay, pt_borde, pt_fil, (40, 150, 255), 2)  # línea naranja
+            # escribir valor pequeño cerca del punto del filamento
+            cv2.putText(overlay, f"{hm:.2f} mm", (pt_fil[0] + 4, max(0, pt_fil[1] - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+
         overlay_final = cv2.addWeighted(img, 0.6, overlay, 0.4, 0)
         overlay_final = cv2.bitwise_and(overlay_final, overlay_final, mask=mask_petri)
 
-        cv2.circle(overlay_final, (cx_textil, cy_textil), int(r_textil), (0, 0, 255), 2)
-
+        # marcar textil
+        cv2.rectangle(overlay_final, (x1_textil, y1_textil), (x2_textil, y2_textil), (0, 0, 255), 2)
         if avg_halo_mm > 0:
             text = f"Halo Inhibición: {avg_halo_mm:.2f} mm"
             cv2.putText(overlay_final, text, (10, 27), cv2.FONT_HERSHEY_SIMPLEX,
@@ -970,6 +974,13 @@ class MultiStandardAnalyzer:
             print("Halo promedio:", avg_halo_mm)
 
         return mask_textil, mask_growth, avg_halo_mm, overlay_final, line_measurements, (cx_textil, cy_textil, r_textil)
+
+
+
+
+
+
+
 
     
     
