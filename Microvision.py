@@ -1064,10 +1064,20 @@ class MultiStandardAnalyzer:
         # Eliminar objetos en el borde
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
 
-        # --- 5️⃣ Distance Transform + separación ---
+        # --- 5️⃣ Distance Transform + separación AGRESIVA ---
         dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-        _, sure_fg = cv2.threshold(dist, 0.4 * dist.max(), 255, 0)  # Aumentado de 0.35 a 0.4
+        
+        # Normalizar distance transform
+        dist_norm = cv2.normalize(dist, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        
+        # Umbral MÁS BAJO para detectar más centros (0.3 en lugar de 0.4)
+        _, sure_fg = cv2.threshold(dist, 0.3 * dist.max(), 255, 0)
         sure_fg = np.uint8(sure_fg)
+        
+        # Dilatar un poco para unir centros muy cercanos
+        kernel_small = np.ones((2, 2), np.uint8)
+        sure_fg = cv2.dilate(sure_fg, kernel_small, iterations=1)
+        
         unknown = cv2.subtract(binary, sure_fg)
         _, markers = cv2.connectedComponents(sure_fg)
         markers = markers + 1
