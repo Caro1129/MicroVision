@@ -1647,11 +1647,12 @@ class MultiStandardAnalyzer:
         if control_path:
             print(f" Procesando imagen de CONTROL...")
             control_img_rgb, control_pca, control_meanshift = self.load_and_process_image(control_path)
-            actual_control_count, control_colonies = self.count_colonies_opencv(control_img_rgb, control_meanshift)
-            
+            actual_control_count, control_original_img, control_detected_img = \
+                self.count_colonies_opencv(control_img_rgb)
+
             # Crear imagen procesada del control con contornos verdes
             control_processed = control_img_rgb.copy()
-            cv2.drawContours(control_processed, control_colonies, -1, (0, 255, 0), 2)
+            control_processed = control_detected_img
             print(f"  Control: {actual_control_count} colonias detectadas")
 
         # Procesar imagen tratada
@@ -1696,12 +1697,9 @@ class MultiStandardAnalyzer:
             # AJUSTAR SENSIBILIDAD AQUÍ
             sensitivity_level = 'medium'  # Cambiar a 'low', 'medium' o 'high'
             # Contar colonias en la imagen tratada
-            treated_count, treated_original, treated_detected = self.count_colonies_opencv(
-                original_img, 
-                meanshift_img, 
-                debug=False,
-                sensitivity=sensitivity_level 
-            )
+            treated_count, treated_original, treated_detected = \
+                self.count_colonies_opencv(original_img, debug=False)
+
             
             print(f"   ✓ Tratada: {treated_count} colonias detectadas")
             
@@ -1735,9 +1733,9 @@ class MultiStandardAnalyzer:
 
 
 
-        
         return results, original_img, pca_img, meanshift_img, control_img_rgb, control_pca, control_meanshift, control_processed
 
+       
 def realizar_test_t_flexible(valores_grupo1, valores_grupo2, nombre_grupo1="Control", nombre_grupo2="Tratada", alpha=0.05):
     
     # CASO 1: Menos de 1 réplica en algún grupo
