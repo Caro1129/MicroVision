@@ -1085,7 +1085,7 @@ class MultiStandardAnalyzer:
             x, y, r = circles[0][0]
             center = (int(x), int(y))
             radius = int(r)
-            cv2.circle(plate_mask, center, int(radius * 0.94), 255, -1)
+            cv2.circle(plate_mask, center, int(radius * 0.82), 255, -1)
         else:
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if contours:
@@ -1094,7 +1094,7 @@ class MultiStandardAnalyzer:
                 if r > 50:
                     center = (int(x), int(y))
                     radius = int(r)
-                    cv2.circle(plate_mask, center, int(radius * 0.94), 255, -1)
+                    cv2.circle(plate_mask, center, int(radius * 0.82), 255, -1)
                 else:
                     plate_mask[:] = 255
             else:
@@ -1172,113 +1172,151 @@ class MultiStandardAnalyzer:
         color_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
         cv2.watershed(color_img, markers)
 
-        # --- 8️⃣ Filtrado inteligente ADAPTATIVO ---
+       # --- 8️⃣ Filtrado inteligente ADAPTATIVO ---
         valid_colonies = []
         rejected_info = []
         unique_markers = np.unique(markers)
-        
+
         for marker in unique_markers:
             if marker <= 1:
                 continue
-            
+
             mask = np.uint8(markers == marker) * 255
             if cv2.countNonZero(mask) < 5:
                 continue
-            
+
             contours_region, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours_region:
                 continue
-            
+
             cnt = max(contours_region, key=cv2.contourArea)
             area = cv2.contourArea(cnt)
-            
+
+            # -----------------------------------------
             # Filtro 1: Área
+            # -----------------------------------------
             if area < p['min_area'] or area > p['max_area']:
                 rejected_info.append(f"M{marker}: área {area:.0f}")
                 continue
-            
-            # Filtro 2: Intensidad (MUY PERMISIVO)
+
+            # -----------------------------------------
+            # Filtro 2: Intensidad mínima (filtro anti-agar)
+            # -----------------------------------------
             mean_int = cv2.mean(enhanced, mask=mask)[0]
+            if mean_int < 50:
+                rejected_info.append(f"M{marker}: intensidad baja {mean_int:.1f}")
+                continue
+
+            # -----------------------------------------
+            # Filtro 3: Intensidad permisivo
+            # -----------------------------------------
             if mean_int < 5 or mean_int > 252:
                 rejected_info.append(f"M{marker}: intensidad {mean_int:.0f}")
                 continue
-            
-            # Filtro 3: Contraste local (OPCIONAL - solo si hay background)
+
+            # -----------------------------------------
+            # Filtro 4: Contraste local
+            # -----------------------------------------
             x, y, w_box, h_box = cv2.boundingRect(cnt)
+
+            # Verificación de borde usando centro de la placa
+            Mshape = cv2.moments(cnt)
+            if Mshape["m00"] > 0:
+                cx_cnt = int(Mshape["m10"] / Mshape["m00"])
+                cy_cnt = int(Mshape["m01"] / Mshape["m00"])
+
+                if center is not None and radius is not None:
+                    dist = np.sqrt((cx_cnt - center[0])**2 + (cy_cnt - center[1])**2)
+                    if dist > radius * 0.80:
+                        rejected_info.append(f"M{marker}: borde")
+                        continue
+
+            # Calcular contraste local alrededor
             margin = 20
             y1 = max(0, y - margin)
             y2 = min(h, y + h_box + margin)
             x1 = max(0, x - margin)
             x2 = min(w, x + w_box + margin)
-            
+
             roi_around = enhanced[y1:y2, x1:x2]
             mask_roi = np.zeros_like(roi_around, dtype=np.uint8)
             cnt_shifted = cnt - [x1, y1]
             cv2.drawContours(mask_roi, [cnt_shifted], -1, 255, -1)
-            
-            # Calcular contraste solo si hay suficiente background
+
             bg_mask = cv2.bitwise_not(mask_roi)
             bg_pixels = cv2.countNonZero(bg_mask)
-            
-            contrast = 999  # Por defecto, pasa el filtro
+
+            contrast = 999
             if bg_pixels > 15:
                 mean_colony = cv2.mean(roi_around, mask=mask_roi)[0]
                 mean_background = cv2.mean(roi_around, mask=bg_mask)[0]
                 contrast = abs(mean_colony - mean_background)
-                
+
                 if contrast < p['min_contrast']:
                     rejected_info.append(f"M{marker}: contraste {contrast:.1f}")
                     continue
-            
-            # Filtro 4: Desviación estándar
+
+            # -----------------------------------------
+            # Filtro 5: Desviación estándar (textura)
+            # -----------------------------------------
             pixels = enhanced[mask > 0]
             if len(pixels) > 3:
                 std_int = np.std(pixels)
                 if std_int < p['min_std'] or std_int > p['max_std']:
                     rejected_info.append(f"M{marker}: std {std_int:.1f}")
                     continue
-            
-            # Filtro 5: Circularidad
+
+            # -----------------------------------------
+            # Filtro 6: Circularidad
+            # -----------------------------------------
             perimeter = cv2.arcLength(cnt, True)
             circularity = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
             if circularity < p['min_circularity']:
                 rejected_info.append(f"M{marker}: circ {circularity:.2f}")
                 continue
-            
-            # Filtro 6: Solidez
+
+            # -----------------------------------------
+            # Filtro 7: Solidez
+            # -----------------------------------------
             hull = cv2.convexHull(cnt)
             hull_area = cv2.contourArea(hull)
             solidity = area / hull_area if hull_area > 0 else 0
             if solidity < p['min_solidity']:
                 rejected_info.append(f"M{marker}: solid {solidity:.2f}")
                 continue
-            
-            # Filtro 7: Aspect Ratio (MUY PERMISIVO)
+
+            # -----------------------------------------
+            # Filtro 8: Aspect Ratio
+            # -----------------------------------------
             aspect_ratio = w_box / h_box if h_box > 0 else 0
             if aspect_ratio > 5.0 or aspect_ratio < 0.2:
                 rejected_info.append(f"M{marker}: aspect {aspect_ratio:.2f}")
                 continue
-            
-            # Filtro 8: Extent (MUY PERMISIVO)
+
+            # -----------------------------------------
+            # Filtro 9: Extent
+            # -----------------------------------------
             rect_area = w_box * h_box
             extent = area / rect_area if rect_area > 0 else 0
             if extent < 0.15:
                 rejected_info.append(f"M{marker}: extent {extent:.2f}")
                 continue
-            
-            # Si pasó todos los filtros, es válida
-            M = cv2.moments(cnt)
-            if M["m00"] > 0:
-                cx_final = int(M["m10"] / M["m00"])
-                cy_final = int(M["m01"] / M["m00"])
+
+            # -----------------------------------------
+            # Si pasó todos los filtros → colonia válida
+            # -----------------------------------------
+            if Mshape["m00"] > 0:
+                cx_final = int(Mshape["m10"] / Mshape["m00"])
+                cy_final = int(Mshape["m01"] / Mshape["m00"])
                 valid_colonies.append({
-                    'centroid': (cx_final, cy_final), 
-                    'contour': cnt, 
-                    'area': area, 
+                    'centroid': (cx_final, cy_final),
+                    'contour': cnt,
+                    'area': area,
                     'circularity': circularity
                 })
 
         colonies_count = len(valid_colonies)
+
 
         # --- 9️⃣ Visualización ---
         try:
