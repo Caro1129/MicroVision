@@ -2893,11 +2893,10 @@ elif st.session_state["pagina"] == "parametros":
                 
                 # CONTAR COLONIAS (con debug opcional)
                 ctrl_count, ctrl_original, ctrl_detected = analyzer.count_colonies_opencv(
-                    ctrl_img_rgb, 
-                    ctrl_ms, 
-                    debug=False,
-                    sensitivity='medium'
+                    ctrl_img_rgb,
+                    debug=False
                 )
+
                 
                 # Guardar resultados
                 control_results_list.append({
