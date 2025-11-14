@@ -2522,14 +2522,29 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
             
 
     # ===== PROCESAR TRATADAS =====
+    # ===== PROCESAR TRATADAS =====
     elif 'JIS' in norma or 'Z2801' in norma:
-        # Contar colonias
+        # Contar colonias con sensibilidad ajustable
         treated_count, treated_original, treated_detected = analyzer.count_colonies_opencv(
             orig, 
             ms, 
             debug=False,
-            sensitivity='medium'
+            sensitivity='medium'  # Puedes cambiar a 'low' o 'high' según necesites
         )
+        
+        # ✅ CALCULAR REDUCCIÓN LOG INDIVIDUAL (para esta réplica)
+        log_red_individual = None
+        if promedio_control is not None and promedio_control > 0 and treated_count >= 0:
+            control_calc = max(1, promedio_control)  # Evitar log(0)
+            treated_calc = max(1, treated_count)      # Evitar log(0)
+            log_red_individual = math.log10(control_calc) - math.log10(treated_calc)
+        
+        # ✅ ACTUALIZAR results con el conteo Y la reducción log
+        results.update({
+            'treated_count': treated_count,
+            'control_count': promedio_control if promedio_control else 'No disponible',
+            'log_reduction': round(log_red_individual, 2) if log_red_individual is not None else 'No calculable'
+        })
         
         # Mostrar imágenes
         cols = st.columns(2)
@@ -2548,6 +2563,45 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
         # Mostrar el conteo total de colonias
         st.markdown(f"**Colonias detectadas:** {treated_count}")
 
+def calcular_reduccion_logaritmica(control_count, treated_count):
+    """
+    Calcula la reducción logarítmica según JIS Z 2801
+    
+    Fórmula: R = log10(Control) - log10(Tratada)
+    
+    Returns:
+        tuple: (reduccion_log, interpretacion, cumple_norma)
+    """
+    if control_count is None or treated_count is None:
+        return None, "Datos insuficientes", False
+    
+    if control_count <= 0 or treated_count < 0:
+        return None, "Valores inválidos", False
+    
+    # Evitar log(0) - si tratada = 0, usar 1 (mejor caso)
+    control_calc = max(1, control_count)
+    treated_calc = max(1, treated_count)
+    
+    log_reduction = math.log10(control_calc) - math.log10(treated_calc)
+    
+    # Interpretación
+    if log_reduction >= 3.0:
+        interpretacion = "Excelente actividad (≥99.9% reducción)"
+        cumple = True
+    elif log_reduction >= 2.0:
+        interpretacion = "Buena actividad (≥99% reducción) - CUMPLE JIS"
+        cumple = True
+    elif log_reduction >= 1.0:
+        interpretacion = "Actividad moderada (≥90% reducción)"
+        cumple = False
+    elif log_reduction > 0:
+        interpretacion = "Actividad baja (<90% reducción)"
+        cumple = False
+    else:
+        interpretacion = "Sin reducción o aumento de colonias"
+        cumple = False
+    
+    return round(log_reduction, 3), interpretacion, cumple
 
 def plot_results_by_norm(norma, results):
     norma_lower = str(norma).lower()
@@ -3323,10 +3377,13 @@ elif st.session_state["pagina"] == "parametros":
         print(f"Total valores válidos: {len(valores_tratadas)}")
         print("="*60 + "\n")
 
-        #  CALCULAR ESTADÍSTICAS
+        # ============= CALCULAR ESTADÍSTICAS FINALES =============
         media = 0.0
         desviacion = 0.0
+        media_control = 0.0
+        desviacion_control = 0.0
 
+        # 📊 Estadísticas de TRATADAS
         if valores_tratadas and len(valores_tratadas) > 0:
             media = float(np.mean(valores_tratadas))
             
@@ -3335,16 +3392,51 @@ elif st.session_state["pagina"] == "parametros":
             else:
                 desviacion = 0.0
             
-            print(f" Media: {media:.2f}")
-            print(f" Desviación: {desviacion:.2f}")
-        else:
-            print(" No hay valores para calcular estadísticas")
+            print(f"✅ Media TRATADAS: {media:.2f}")
+            print(f"✅ Desviación TRATADAS: {desviacion:.2f}")
+
+        # 📊 Estadísticas de CONTROL (solo para JIS)
+        if 'JIS' in norma or 'Z2801' in norma:
+            control_results_list = st.session_state.get("control_results_list", [])
+            if control_results_list and len(control_results_list) > 0:
+                valores_control = [c['count'] for c in control_results_list]
+                media_control = float(np.mean(valores_control))
+                
+                if len(valores_control) > 1:
+                    desviacion_control = float(np.std(valores_control, ddof=1))
+                else:
+                    desviacion_control = 0.0
+                
+                print(f"✅ Media CONTROL: {media_control:.2f}")
+                print(f"✅ Desviación CONTROL: {desviacion_control:.2f}")
+                
+                # 🔬 CALCULAR REDUCCIÓN LOGARÍTMICA FINAL
+                log_red_final, interpretacion_log, cumple_jis = calcular_reduccion_logaritmica(
+                    media_control, 
+                    media
+                )
+                
+                if log_red_final is not None:
+                    st.session_state["log_reduction_final"] = log_red_final
+                    st.session_state["log_interpretation"] = interpretacion_log
+                    st.session_state["cumple_jis"] = cumple_jis
+                    
+                    print(f"\n{'='*60}")
+                    print(f"🎯 REDUCCIÓN LOGARÍTMICA FINAL")
+                    print(f"   Control promedio: {media_control:.2f} UFC")
+                    print(f"   Tratada promedio: {media:.2f} UFC")
+                    print(f"   Reducción Log: {log_red_final:.3f}")
+                    print(f"   Interpretación: {interpretacion_log}")
+                    print(f"   Cumple JIS: {'✅ SÍ' if cumple_jis else '❌ NO'}")
+                    print(f"{'='*60}\n")
 
         # Guardar en session_state
         st.session_state["num_replicas"] = len(treated_results_list)
         st.session_state["valores_replicas"] = valores_tratadas
         st.session_state["media"] = media
         st.session_state["desviacion"] = desviacion
+        st.session_state["media_control"] = media_control  # ← NUEVO
+        st.session_state["desviacion_control"] = desviacion_control  # ← NUEVO
         st.session_state["treated_results_list"] = treated_results_list
 
         if treated_results_list:
@@ -3358,21 +3450,162 @@ elif st.session_state["pagina"] == "parametros":
             st.session_state["control_img_rgb"] = control_results_list[0]['original']
             st.session_state["control_processed"] = control_results_list[0]['processed']
 
-        # Mostrar en interfaz
-        if valores_tratadas and len(valores_tratadas) > 1:
-            st.success(" Estadísticas finales de todas las réplicas tratadas")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Número de réplicas", len(valores_tratadas))
-            c2.metric("Promedio", f"{media:.2f}")
-            c3.metric("Desviación estándar", f"{desviacion:.2f}")
-        elif valores_tratadas and len(valores_tratadas) == 1:
-            st.info(" Solo 1 réplica analizada")
-            c1, c2 = st.columns(2)
-            c1.metric("Número de réplicas", 1)
-            c2.metric("Valor", f"{media:.2f}")
-        else:
-            st.warning(" No se encontraron valores numéricos válidos para calcular estadísticas")       
+        # ============================================================================
+        # 📊 4. MOSTRAR RESULTADOS FINALES EN LA INTERFAZ
+        # ============================================================================
+        st.markdown("---")
 
+        # 🔬 CASO 1: NORMA JIS (Control + Tratadas + Reducción Log)
+        if 'JIS' in norma or 'Z2801' in norma:
+            control_results_list = st.session_state.get("control_results_list", [])
+            
+            if control_results_list and treated_results_list:
+                st.success("✅ Análisis completado exitosamente")
+                st.markdown("## 🔬 Resultados Finales JIS Z 2801")
+                
+                # Métricas principales
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric(
+                        "Control Promedio", 
+                        f"{media_control:.1f} UFC",
+                        delta=f"n={len(control_results_list)}"
+                    )
+                    if len(control_results_list) > 1:
+                        st.caption(f"± {desviacion_control:.1f} UFC")
+                
+                with col2:
+                    delta_val = -(media_control - media)
+                    st.metric(
+                        "Tratada Promedio", 
+                        f"{media:.1f} UFC",
+                        delta=f"{delta_val:.1f}",
+                        delta_color="inverse"
+                    )
+                    if len(treated_results_list) > 1:
+                        st.caption(f"± {desviacion:.1f} UFC")
+                
+                with col3:
+                    log_red_display = st.session_state.get("log_reduction_final", 0)
+                    
+                    # Emoji según valor
+                    if log_red_display >= 3.0:
+                        emoji = "🟢"
+                    elif log_red_display >= 2.0:
+                        emoji = "🟡"
+                    elif log_red_display >= 1.0:
+                        emoji = "🟠"
+                    else:
+                        emoji = "🔴"
+                    
+                    st.metric(
+                        "Reducción Logarítmica",
+                        f"{log_red_display:.3f} log₁₀"
+                    )
+                    st.markdown(f"<h1 style='text-align: center; font-size: 48px;'>{emoji}</h1>", 
+                            unsafe_allow_html=True)
+                
+                with col4:
+                    porcentaje = ((media_control - media) / media_control * 100) if media_control > 0 else 0
+                    st.metric(
+                        "% Reducción",
+                        f"{porcentaje:.1f}%"
+                    )
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # Tabla resumen
+                st.markdown("### 📋 Resumen Detallado")
+                
+                data_resumen = {
+                    'Parámetro': [
+                        'Control Promedio (UFC)',
+                        'Tratada Promedio (UFC)',
+                        'Reducción Logarítmica (log₁₀)',
+                        'Reducción Porcentual (%)',
+                        'Réplicas Control',
+                        'Réplicas Tratadas'
+                    ],
+                    'Valor': [
+                        f"{media_control:.2f} ± {desviacion_control:.2f}" if len(control_results_list) > 1 else f"{media_control:.2f}",
+                        f"{media:.2f} ± {desviacion:.2f}" if len(treated_results_list) > 1 else f"{media:.2f}",
+                        f"{log_red_display:.3f}",
+                        f"{porcentaje:.1f}%",
+                        str(len(control_results_list)),
+                        str(len(treated_results_list))
+                    ]
+                }
+                
+                df_resumen = pd.DataFrame(data_resumen)
+                st.dataframe(df_resumen, use_container_width=True, hide_index=True)
+                
+                # Interpretación final con estilo
+                interpretacion_final = st.session_state.get("log_interpretation", "")
+                cumple = st.session_state.get("cumple_jis", False)
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                if cumple:
+                    st.markdown(f"""
+                        <div style='background-color: #d4edda; padding: 20px; border-radius: 10px; 
+                                    border-left: 5px solid #28a745;'>
+                            <h3 style='color: #155724; margin: 0;'>✅ CUMPLE con JIS Z 2801</h3>
+                            <p style='color: #155724; font-size: 16px; margin: 10px 0 0 0;'>
+                                {interpretacion_final}
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                        <div style='background-color: #f8d7da; padding: 20px; border-radius: 10px; 
+                                    border-left: 5px solid #dc3545;'>
+                            <h3 style='color: #721c24; margin: 0;'>❌ NO CUMPLE con JIS Z 2801</h3>
+                            <p style='color: #721c24; font-size: 16px; margin: 10px 0 0 0;'>
+                                {interpretacion_final}
+                            </p>
+                            <p style='color: #721c24; font-size: 14px; margin: 10px 0 0 0;'>
+                                <em>Nota: Se requiere R ≥ 2.0 para cumplir con la norma</em>
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+            
+            elif treated_results_list and not control_results_list:
+                st.warning("⚠️ Se procesaron imágenes tratadas pero faltan imágenes de control para calcular reducción logarítmica")
+                st.info(f"📊 Tratadas analizadas: {len(treated_results_list)} | Promedio: {media:.2f} UFC")
+
+        # 📊 CASO 2: OTRAS NORMAS (Solo tratadas)
+        else:
+            if valores_tratadas:
+                st.success("✅ Análisis completado exitosamente")
+                
+                if len(valores_tratadas) > 1:
+                    st.markdown("## 📊 Estadísticas Finales de Réplicas Tratadas")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        st.metric("Número de réplicas", len(valores_tratadas))
+                    
+                    with col2:
+                        st.metric("Promedio", f"{media:.2f}")
+                    
+                    with col3:
+                        st.metric("Desviación estándar", f"{desviacion:.2f}")
+                    
+                    # Mini tabla
+                    st.markdown("### 📋 Valores individuales")
+                    data_replicas = {
+                        'Réplica': [f"Réplica {i+1}" for i in range(len(valores_tratadas))],
+                        'Valor': [f"{v:.2f}" for v in valores_tratadas]
+                    }
+                    df_replicas = pd.DataFrame(data_replicas)
+                    st.dataframe(df_replicas, use_container_width=True, hide_index=True)
+                    
+                elif len(valores_tratadas) == 1:
+                    st.info(f"✅ 1 réplica analizada | Valor: {media:.2f}")
+            else:
+                st.warning("⚠️ No se encontraron valores numéricos válidos para mostrar estadísticas")
             # ============= ANÁLISIS ESTADÍSTICO CON TEST T =============
         # Funciona con 1 o más réplicas por grupo
 
