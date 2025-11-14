@@ -2522,22 +2522,40 @@ def mostrar_resultado_individual(replica, norma, analyzer, mm_per_pixel):
             
 
     # ===== PROCESAR TRATADAS =====
-    # ===== PROCESAR TRATADAS =====
     elif 'JIS' in norma or 'Z2801' in norma:
-        # Contar colonias con sensibilidad ajustable
+        # Contar colonias
         treated_count, treated_original, treated_detected = analyzer.count_colonies_opencv(
             orig, 
             ms, 
             debug=False,
-            sensitivity='medium'  # Puedes cambiar a 'low' o 'high' según necesites
+            sensitivity='medium'
         )
         
-        # ✅ CALCULAR REDUCCIÓN LOG INDIVIDUAL (para esta réplica)
-        log_red_individual = None
-        if promedio_control is not None and promedio_control > 0 and treated_count >= 0:
-            control_calc = max(1, promedio_control)  # Evitar log(0)
-            treated_calc = max(1, treated_count)      # Evitar log(0)
-            log_red_individual = math.log10(control_calc) - math.log10(treated_calc)
+        # ✅ NO CALCULAR log_reduction aquí - se hará al final con promedios
+        # Solo guardar el conteo
+        results.update({
+            'treated_count': treated_count,
+            'control_count': promedio_control if promedio_control else 'Pendiente',
+            'log_reduction': 'Se calculará al final'  # ← Temporal
+        })
+        
+        # Mostrar imágenes
+        cols = st.columns(2)
+        
+        # Verificar que la imagen existe antes de mostrar
+        if treated_original is not None and isinstance(treated_original, np.ndarray):
+            try:
+                if len(treated_original.shape) == 3 and treated_original.shape[2] == 3:
+                    treated_original_rgb = cv2.cvtColor(treated_original, cv2.COLOR_BGR2RGB)
+                else:
+                    treated_original_rgb = treated_original
+                
+                cols[0].image(treated_original_rgb, caption="Original")
+            except Exception as e:
+                st.error(f"Error al mostrar imagen original: {e}")
+        
+        if treated_detected is not None:
+            cols[1].image(treated_detected, caption=f"Colonias detectadas: {treated_count}")
         
         # ✅ ACTUALIZAR results con el conteo Y la reducción log
         results.update({
