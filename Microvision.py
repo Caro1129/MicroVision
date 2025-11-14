@@ -1015,144 +1015,75 @@ class MultiStandardAnalyzer:
 
     
     
-    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
-        """
-        Conteo de colonias para colonias CLARAS sobre agar CLARO/MEDIO.
-        Método: binarización por voto + watershed suave + filtrado morfológico.
-        """
+    def count_colonies_opencv(self, original_img, segmentacion=None, debug=False):
 
         import cv2
         import numpy as np
         import matplotlib.pyplot as plt
         import streamlit as st
 
-        # -------------------------------
-        # PARÁMETROS
-        # -------------------------------
-        params = {
-            'min_area': 80,
-            'max_area': 9000,
-            'min_circularity': 0.20,
-            'min_contrast': 3,
-            'min_std': 1.5,
-            'max_std': 70,
-            'min_solidity': 0.35,
-            'erosion_iter': 1,
-            'dist_thresh': 0.19
-        }
+        # ===============================
+        # 1) PREPROCESAMIENTO
+        # ===============================
+        gray = cv2.cvtColor(original_img, cv2.COLOR_BGR2GRAY)
 
-        # -------------------------------
-        # 1. PREPARAR IMÁGENES
-        # -------------------------------
-        if len(original_img.shape) == 2:
-            gray = original_img
-            img_rgb = cv2.cvtColor(original_img, cv2.COLOR_GRAY2BGR)
-        else:
-            gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-            img_rgb = original_img.copy()
-
-        h, w = gray.shape
-
-        # -------------------------------
-        # 2. DETECCIÓN DE LA PLACA
-        # -------------------------------
-        blur = cv2.GaussianBlur(gray, (7, 7), 0)
-        edges = cv2.Canny(blur, 30, 120)
-
-        circles = cv2.HoughCircles(
-            blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=100,
-            param1=50, param2=30,
-            minRadius=int(min(h, w) * 0.25),
-            maxRadius=int(min(h, w) * 0.60)
-        )
-
-        plate_mask = np.zeros_like(gray, dtype=np.uint8)
-        center, radius = None, None
-
-        if circles is not None:
-            circles = np.uint16(np.around(circles))
-            x, y, r = circles[0][0]
-            center = (int(x), int(y))
-            radius = int(r)
-            cv2.circle(plate_mask, center, int(radius * 0.87), 255, -1)
-        else:
-            plate_mask[:] = 255
-
-        # -------------------------------
-        # 3. PREPROCESAMIENTO
-        # -------------------------------
-        masked = cv2.bitwise_and(gray, gray, mask=plate_mask)
-        denoised = cv2.bilateralFilter(masked, 11, 50, 50)
+        # Suavizado
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
 
         # CLAHE para resaltar colonias claras
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(denoised)
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+        enhanced = clahe.apply(blur)
 
-        # Background removal suave
-        kernel_bg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (45, 45))
-        background = cv2.morphologyEx(enhanced, cv2.MORPH_OPEN, kernel_bg)
-        enhanced = cv2.subtract(enhanced, background)
+        # Normalización final
         enhanced = cv2.normalize(enhanced, None, 0, 255, cv2.NORM_MINMAX)
 
-        # -------------------------------
-        # 4. BINARIZACIÓN POR VOTACIÓN
-        # -------------------------------
-        b1 = cv2.adaptiveThreshold(enhanced, 255,
-                                cv2.ADAPTIVE_THRESH_MEAN_C,
-                                cv2.THRESH_BINARY, 51, -6)
+        # ===============================
+        # 2) BINARIZACIÓN CORRECTA (NO INVERSA)
+        # Colonias claras → blanco
+        # Fondo claro → gris/oscuro
+        # ===============================
 
-        b2 = cv2.adaptiveThreshold(enhanced, 255,
-                                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                cv2.THRESH_BINARY, 51, -6)
+        # Otsu directo (sin invertir)
+        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        _, b3 = cv2.threshold(
-            cv2.GaussianBlur(enhanced, (5, 5), 0),
-            0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-
-        # Votación: t = colonia si ≥ 2 métodos la incluyen
-        bin_sum = (b1 + b2 + b3) / 255
-        binary = (bin_sum >= 2).astype(np.uint8) * 255
-        binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
-
-        # -------------------------------
-        # 5. LIMPIEZA MORFOLÓGICA
-        # -------------------------------
+        # Apertura para eliminar ruido
         kernel = np.ones((3, 3), np.uint8)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
+        binary_clean = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
 
-        # -------------------------------
-        # 6. WATERSHED SUAVE
-        # -------------------------------
-        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-        dist = cv2.GaussianBlur(dist, (5, 5), 0)
+        # ===============================
+        # 3) DISTANCE TRANSFORM
+        # ===============================
+        dist = cv2.distanceTransform(binary_clean, cv2.DIST_L2, 5)
 
-        _, sure_fg = cv2.threshold(
-            dist, params['dist_thresh'] * dist.max(), 255, 0
-        )
-        sure_fg = np.uint8(sure_fg)
+        # threshold suave
+        _, sure_fg = cv2.threshold(dist, 0.25 * dist.max(), 255, 0)
+        sure_fg = sure_fg.astype(np.uint8)
 
-        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(sure_fg)
+        # Fondo probable
+        sure_bg = cv2.dilate(binary_clean, kernel, iterations=3)
+        unknown = cv2.subtract(sure_bg, sure_fg)
 
-        markers = labels + 1
-        unknown = cv2.subtract(binary, sure_fg)
+        # ===============================
+        # 4) WATERSHED
+        # ===============================
+        num_labels, markers = cv2.connectedComponents(sure_fg)
+        markers = markers + 1
         markers[unknown == 255] = 0
 
         ws_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
         cv2.watershed(ws_img, markers)
 
-        # -------------------------------
-        # 7. FILTRADO DE COLONIAS
-        # -------------------------------
-        valid_colonies = []
+        # ===============================
+        # 5) FILTRADO DE COLONIAS
+        # ===============================
+        valid = []
 
         for label in np.unique(markers):
             if label <= 1:
                 continue
 
             mask = np.uint8(markers == label) * 255
-            if cv2.countNonZero(mask) < 30:
+            if cv2.countNonZero(mask) < 50:
                 continue
 
             cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1162,21 +1093,9 @@ class MultiStandardAnalyzer:
             cnt = max(cnts, key=cv2.contourArea)
             area = cv2.contourArea(cnt)
 
-            if not (params['min_area'] <= area <= params['max_area']):
+            if area < 50 or area > 8000:
                 continue
 
-            # circularidad mínima
-            peri = cv2.arcLength(cnt, True)
-            circ = 4 * np.pi * area / (peri * peri)
-            if circ < params['min_circularity']:
-                continue
-
-            hull = cv2.convexHull(cnt)
-            sol = area / (cv2.contourArea(hull) + 1e-5)
-            if sol < params['min_solidity']:
-                continue
-
-            # centroid
             M = cv2.moments(cnt)
             if M["m00"] == 0:
                 continue
@@ -1184,29 +1103,25 @@ class MultiStandardAnalyzer:
             cx = int(M["m10"] / M["m00"])
             cy = int(M["m01"] / M["m00"])
 
-            valid_colonies.append(((cx, cy), cnt))
+            valid.append((cx, cy, cnt))
 
-        colonies_count = len(valid_colonies)
+        count = len(valid)
 
-        # -------------------------------
-        # 8. VISUALIZACIÓN
-        # -------------------------------
-        detected = img_rgb.copy()
+        # ===============================
+        # 6) VISUALIZACIÓN
+        # ===============================
+        vis = original_img.copy()
 
-        if center:
-            cv2.circle(detected, center, int(radius * 0.90), (0, 255, 255), 2)
-
-        for i, (centroid, contour) in enumerate(valid_colonies, 1):
-            cx, cy = centroid
-            cv2.circle(detected, (cx, cy), 6, (0, 255, 0), 2)
-            cv2.putText(detected, str(i), (cx - 6, cy - 6),
+        for i, (cx, cy, cnt) in enumerate(valid, 1):
+            cv2.circle(vis, (cx, cy), 6, (0, 255, 0), 2)
+            cv2.putText(vis, str(i), (cx - 6, cy - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
 
-        cv2.rectangle(detected, (10, 10), (250, 50), (0, 0, 0), -1)
-        cv2.putText(detected, f"COLONIAS: {colonies_count}", (20, 40),
+        cv2.rectangle(vis, (10, 10), (220, 50), (0, 0, 0), -1)
+        cv2.putText(vis, f"COLONIAS: {count}", (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        return colonies_count, original_img, detected
+        return count, original_img, vis
 
 
 
