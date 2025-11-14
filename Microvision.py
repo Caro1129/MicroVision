@@ -1017,8 +1017,7 @@ class MultiStandardAnalyzer:
     
     def count_colonies_opencv(self, original_img, segmentacion=None, debug=False, sensitivity='medium'):
         """
-        Contador de colonias bacterianas OPTIMIZADO v4
-        Enfoque adaptativo: detecta automáticamente si colonias son claras u oscuras
+        Contador de colonias bacterianas OPTIMIZADO v4 (versión corregida para colonias semitransparentes)
         """
         import cv2
         import numpy as np
@@ -1038,18 +1037,18 @@ class MultiStandardAnalyzer:
             },
 
             'medium': {
-                'min_area': 20, 'max_area': 9000,
-                'min_circularity': 0.25,
+                'min_area': 15, 'max_area': 10000,        # min_area reducido
+                'min_circularity': 0.40,                 # más estricto (evita ruido plano)
                 'min_contrast': 4,
-                'min_std': 0.8, 'max_std': 55,
+                'min_std': 0.6, 'max_std': 55,
                 'erosion_iter': 1,
                 'dist_threshold': 0.18,
                 'min_solidity': 0.30
             },
 
             'high': {
-                'min_area': 15, 'max_area': 10000,
-                'min_circularity': 0.20,
+                'min_area': 12, 'max_area': 12000,
+                'min_circularity': 0.35,
                 'min_contrast': 3,
                 'min_std': 0.5, 'max_std': 60,
                 'erosion_iter': 1,
@@ -1085,6 +1084,7 @@ class MultiStandardAnalyzer:
             x, y, r = circles[0][0]
             center = (int(x), int(y))
             radius = int(r)
+            # limitar a 82% para evitar borde problemático
             cv2.circle(plate_mask, center, int(radius * 0.82), 255, -1)
         else:
             contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1121,28 +1121,23 @@ class MultiStandardAnalyzer:
             background = enhanced.copy()
 
         # --- 4️⃣ Binarización TRIPLE con votación ---
-        # Detectar si colonias son claras u oscuras
         meanv = np.mean(enhanced[plate_mask > 0])
-        
-        # Método 1: Adaptativo Gaussiano
+
         binary1 = cv2.adaptiveThreshold(
             enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY_INV, 51, 3
         )
 
-        # Método 2: Adaptativo Mean
         binary2 = cv2.adaptiveThreshold(
             enhanced, 255, cv2.ADAPTIVE_THRESH_MEAN_C,
             cv2.THRESH_BINARY_INV, 51, 3
         )
 
-        # Método 3: Otsu
         blur_local = cv2.GaussianBlur(enhanced, (5, 5), 0)
         _, binary3 = cv2.threshold(
             blur_local, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
         )
 
-        # Votación: al menos 2 de 3 métodos deben estar de acuerdo
         binary_sum = (binary1.astype(float) + binary2.astype(float) + binary3.astype(float)) / 255.0
         binary = ((binary_sum >= 2.0) * 255).astype(np.uint8)
         binary = cv2.bitwise_and(binary, binary, mask=plate_mask)
@@ -1172,7 +1167,7 @@ class MultiStandardAnalyzer:
         color_img = cv2.cvtColor(enhanced, cv2.COLOR_GRAY2BGR)
         cv2.watershed(color_img, markers)
 
-       # --- 8️⃣ Filtrado inteligente ADAPTATIVO ---
+        # --- 8️⃣ Filtrado inteligente ADAPTATIVO (corregido) ---
         valid_colonies = []
         rejected_info = []
         unique_markers = np.unique(markers)
@@ -1182,7 +1177,7 @@ class MultiStandardAnalyzer:
                 continue
 
             mask = np.uint8(markers == marker) * 255
-            if cv2.countNonZero(mask) < 5:
+            if cv2.countNonZero(mask) < 8:  # un poco más estricto para descartar marcadores ridículos
                 continue
 
             contours_region, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -1192,73 +1187,57 @@ class MultiStandardAnalyzer:
             cnt = max(contours_region, key=cv2.contourArea)
             area = cv2.contourArea(cnt)
 
-            # -----------------------------------------
             # Filtro 1: Área
-            # -----------------------------------------
             if area < p['min_area'] or area > p['max_area']:
                 rejected_info.append(f"M{marker}: área {area:.0f}")
                 continue
 
-            # -----------------------------------------
-            # Filtro 2: Intensidad mínima (filtro anti-agar)
-            # -----------------------------------------
+            # Filtro 2: Intensidad mínima SUAVE (tus colonias son semitransparentes)
             mean_int = cv2.mean(enhanced, mask=mask)[0]
-            if mean_int < 50:
+            if mean_int < 25:   # <-- valor suave para no perder colonias pálidas
                 rejected_info.append(f"M{marker}: intensidad baja {mean_int:.1f}")
                 continue
 
-            # -----------------------------------------
-            # Filtro 3: Intensidad permisivo
-            # -----------------------------------------
-            if mean_int < 5 or mean_int > 252:
-                rejected_info.append(f"M{marker}: intensidad {mean_int:.0f}")
+            # Filtro: evitar puntos demasiado oscuros/ saturados extremos
+            if mean_int < 3 or mean_int > 252:
+                rejected_info.append(f"M{marker}: intensidad extrema {mean_int:.1f}")
                 continue
 
-            # -----------------------------------------
-            # Filtro 4: Contraste local
-            # -----------------------------------------
-            x, y, w_box, h_box = cv2.boundingRect(cnt)
-
-            # Verificación de borde usando centro de la placa
+            # Filtro: distancia al centro (borde)
             Mshape = cv2.moments(cnt)
-            if Mshape["m00"] > 0:
-                cx_cnt = int(Mshape["m10"] / Mshape["m00"])
-                cy_cnt = int(Mshape["m01"] / Mshape["m00"])
+            if Mshape["m00"] == 0:
+                continue
+            cx_cnt = int(Mshape["m10"] / Mshape["m00"])
+            cy_cnt = int(Mshape["m01"] / Mshape["m00"])
+            if center is not None and radius is not None:
+                dist = np.sqrt((cx_cnt - center[0])**2 + (cy_cnt - center[1])**2)
+                if dist > radius * 0.82:
+                    rejected_info.append(f"M{marker}: borde")
+                    continue
 
-                if center is not None and radius is not None:
-                    dist = np.sqrt((cx_cnt - center[0])**2 + (cy_cnt - center[1])**2)
-                    if dist > radius * 0.80:
-                        rejected_info.append(f"M{marker}: borde")
-                        continue
-
-            # Calcular contraste local alrededor
+            # Contraste local (si hay suficiente background)
+            x, y, w_box, h_box = cv2.boundingRect(cnt)
             margin = 20
             y1 = max(0, y - margin)
             y2 = min(h, y + h_box + margin)
             x1 = max(0, x - margin)
             x2 = min(w, x + w_box + margin)
-
             roi_around = enhanced[y1:y2, x1:x2]
             mask_roi = np.zeros_like(roi_around, dtype=np.uint8)
             cnt_shifted = cnt - [x1, y1]
             cv2.drawContours(mask_roi, [cnt_shifted], -1, 255, -1)
-
             bg_mask = cv2.bitwise_not(mask_roi)
             bg_pixels = cv2.countNonZero(bg_mask)
 
-            contrast = 999
             if bg_pixels > 15:
                 mean_colony = cv2.mean(roi_around, mask=mask_roi)[0]
                 mean_background = cv2.mean(roi_around, mask=bg_mask)[0]
                 contrast = abs(mean_colony - mean_background)
-
                 if contrast < p['min_contrast']:
                     rejected_info.append(f"M{marker}: contraste {contrast:.1f}")
                     continue
 
-            # -----------------------------------------
-            # Filtro 5: Desviación estándar (textura)
-            # -----------------------------------------
+            # Desviación estándar (textura)
             pixels = enhanced[mask > 0]
             if len(pixels) > 3:
                 std_int = np.std(pixels)
@@ -1266,18 +1245,14 @@ class MultiStandardAnalyzer:
                     rejected_info.append(f"M{marker}: std {std_int:.1f}")
                     continue
 
-            # -----------------------------------------
-            # Filtro 6: Circularidad
-            # -----------------------------------------
+            # Circularidad
             perimeter = cv2.arcLength(cnt, True)
-            circularity = 4 * np.pi * area / (perimeter ** 2) if perimeter > 0 else 0
+            circularity = 4 * np.pi * area / (perimeter ** 2 + 1e-6)
             if circularity < p['min_circularity']:
                 rejected_info.append(f"M{marker}: circ {circularity:.2f}")
                 continue
 
-            # -----------------------------------------
-            # Filtro 7: Solidez
-            # -----------------------------------------
+            # Solidez
             hull = cv2.convexHull(cnt)
             hull_area = cv2.contourArea(hull)
             solidity = area / hull_area if hull_area > 0 else 0
@@ -1285,116 +1260,80 @@ class MultiStandardAnalyzer:
                 rejected_info.append(f"M{marker}: solid {solidity:.2f}")
                 continue
 
-            # -----------------------------------------
-            # Filtro 8: Aspect Ratio
-            # -----------------------------------------
+            # Aspect ratio y extent (permisivos)
+            x, y, w_box, h_box = cv2.boundingRect(cnt)
             aspect_ratio = w_box / h_box if h_box > 0 else 0
             if aspect_ratio > 5.0 or aspect_ratio < 0.2:
                 rejected_info.append(f"M{marker}: aspect {aspect_ratio:.2f}")
                 continue
-
-            # -----------------------------------------
-            # Filtro 9: Extent
-            # -----------------------------------------
             rect_area = w_box * h_box
             extent = area / rect_area if rect_area > 0 else 0
-            if extent < 0.15:
+            if extent < 0.12:    # un poco más permisivo
                 rejected_info.append(f"M{marker}: extent {extent:.2f}")
                 continue
 
-            # -----------------------------------------
-            # Si pasó todos los filtros → colonia válida
-            # -----------------------------------------
-            if Mshape["m00"] > 0:
-                cx_final = int(Mshape["m10"] / Mshape["m00"])
-                cy_final = int(Mshape["m01"] / Mshape["m00"])
-                valid_colonies.append({
-                    'centroid': (cx_final, cy_final),
-                    'contour': cnt,
-                    'area': area,
-                    'circularity': circularity
-                })
+            # Si pasó todo → válida
+            cx_final = int(Mshape["m10"] / Mshape["m00"])
+            cy_final = int(Mshape["m01"] / Mshape["m00"])
+            valid_colonies.append({
+                'centroid': (cx_final, cy_final),
+                'contour': cnt,
+                'area': area,
+                'circularity': circularity
+            })
 
         colonies_count = len(valid_colonies)
-
 
         # --- 9️⃣ Visualización ---
         try:
             detected_img = img_rgb.copy()
             if center and radius:
                 cv2.circle(detected_img, center, int(radius * 0.91), (255, 255, 0), 2)
-            
+
             for i, colony in enumerate(valid_colonies):
                 cx, cy = colony['centroid']
                 cv2.circle(detected_img, (cx, cy), 7, (0, 255, 0), 2)
-                cv2.putText(detected_img, str(i + 1), (cx - 8, cy + 8), 
+                cv2.putText(detected_img, str(i + 1), (cx - 8, cy + 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 2)
-            
+
             cv2.rectangle(detected_img, (5, 5), (320, 45), (0, 0, 0), -1)
-            cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35), 
+            cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         except Exception as e:
             print(f"⚠️ Error en visualización: {e}")
             detected_img = img_rgb.copy()
 
+        # debug plots (igual que tenías)
         if debug:
             fig, axes = plt.subplots(3, 3, figsize=(18, 12))
-            axes[0, 0].imshow(gray, cmap='gray')
-            axes[0, 0].set_title("1. Original")
-            
-            axes[0, 1].imshow(background, cmap='gray')
-            axes[0, 1].set_title("2. Background")
-            
-            axes[0, 2].imshow(enhanced, cmap='gray')
-            axes[0, 2].set_title("3. Enhanced")
-            
-            axes[1, 0].imshow(binary, cmap='gray')
-            axes[1, 0].set_title(f"4. Binaria (votación 2/3)")
-            
-            axes[1, 1].imshow(dist_transform, cmap='jet')
-            axes[1, 1].set_title("5. Distance Transform")
-            
-            axes[1, 2].imshow(sure_fg, cmap='gray')
-            axes[1, 2].set_title("6. Centros detectados")
-            
-            markers_display = markers.copy()
-            markers_display[markers_display == -1] = 0
-            axes[2, 0].imshow(markers_display, cmap='nipy_spectral')
-            axes[2, 0].set_title(f"7. Watershed ({num_labels-1} regiones)")
-            
+            axes[0, 0].imshow(gray, cmap='gray'); axes[0, 0].set_title("1. Original")
+            axes[0, 1].imshow(background, cmap='gray'); axes[0, 1].set_title("2. Background")
+            axes[0, 2].imshow(enhanced, cmap='gray'); axes[0, 2].set_title("3. Enhanced")
+            axes[1, 0].imshow(binary, cmap='gray'); axes[1, 0].set_title(f"4. Binaria (votación 2/3)")
+            axes[1, 1].imshow(dist_transform, cmap='jet'); axes[1, 1].set_title("5. Distance Transform")
+            axes[1, 2].imshow(sure_fg, cmap='gray'); axes[1, 2].set_title("6. Centros detectados")
+            markers_display = markers.copy(); markers_display[markers_display == -1] = 0
+            axes[2, 0].imshow(markers_display, cmap='nipy_spectral'); axes[2, 0].set_title(f"7. Watershed ({num_labels-1} regiones)")
             valid_mask = np.zeros_like(gray)
             for colony in valid_colonies:
                 cv2.drawContours(valid_mask, [colony['contour']], -1, 255, -1)
-            axes[2, 1].imshow(valid_mask, cmap='gray')
-            axes[2, 1].set_title(f"8. Válidas: {colonies_count}")
-            
-            axes[2, 2].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
-            axes[2, 2].set_title(f"9. Resultado final")
-            
-            for ax in axes.flat:
-                ax.axis('off')
-            plt.tight_layout()
-            st.pyplot(fig)
-            plt.close()
+            axes[2, 1].imshow(valid_mask, cmap='gray'); axes[2, 1].set_title(f"8. Válidas: {colonies_count}")
+            axes[2, 2].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB)); axes[2, 2].set_title(f"9. Resultado final")
+            for ax in axes.flat: ax.axis('off')
+            plt.tight_layout(); st.pyplot(fig); plt.close()
 
+        # informe de rechazos (útil para depurar)
         if len(rejected_info) > 0:
-            print(f"\n📊 ANÁLISIS DE RECHAZOS:")
-            print(f"   Total rechazadas: {len(rejected_info)}")
-            print(f"   Mostrando primeras 30:")
-            for info in rejected_info[:30]:
+            print(f"\n📊 ANÁLISIS DE RECHAZOS: Total rechazadas: {len(rejected_info)}")
+            for info in rejected_info[:60]:
                 print(f"   ❌ {info}")
 
         print(f"\n{'='*60}")
-        print(f"🔬 RESULTADO FINAL:")
-        print(f"   Colonias VÁLIDAS: {colonies_count}")
-        print(f"   Sensibilidad: {sensitivity}")
-        print(f"   Regiones watershed detectadas: {num_labels - 1}")
-        print(f"   Regiones rechazadas: {num_labels - 1 - colonies_count}")
-        if num_labels > 1:
-            print(f"   Tasa de aceptación: {colonies_count/(num_labels-1)*100:.1f}%")
+        print(f"🔬 RESULTADO FINAL: Colonias VÁLIDAS: {colonies_count}  |  Sensibilidad: {sensitivity}")
         print(f"{'='*60}\n")
 
         return colonies_count, original_img, detected_img
+
 
 
 
