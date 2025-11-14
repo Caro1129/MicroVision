@@ -1013,13 +1013,10 @@ class MultiStandardAnalyzer:
 
 
 
-    
-    
     def count_colonies_opencv(self, original_img, debug=False):
         """
-        Contador optimizado para COLONIAS CLARAS sobre AGAR CLARO.
-        Sin watershed (solo separación suave).
-        Súper robusto y sin falsos positivos.
+        Contador optimizado para COLONIAS CLARAS sobre AGAR CLARO,
+        con separación de colonias pegadas usando distance transform + watershed.
         """
 
         import cv2
@@ -1027,7 +1024,7 @@ class MultiStandardAnalyzer:
         import matplotlib.pyplot as plt
         import streamlit as st
 
-        # --- Asegurar escala gris ---
+        # --- 1) Escala de grises ---
         if len(original_img.shape) == 3:
             gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
             img_rgb = original_img.copy()
@@ -1035,45 +1032,63 @@ class MultiStandardAnalyzer:
             gray = original_img.copy()
             img_rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-        h, w = gray.shape
-
-        # --- Suavizado + realce ---
+        # --- 2) Suavizado + realce ---
         den = cv2.bilateralFilter(gray, 9, 40, 40)
         clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
         enh = clahe.apply(den)
 
-        # --- Eliminación suave de fondo ---
+        # --- 3) Eliminación de fondo ---
         kernel_bg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (45, 45))
         bg = cv2.morphologyEx(enh, cv2.MORPH_OPEN, kernel_bg)
         enh2 = cv2.subtract(enh, bg)
         enh2 = cv2.normalize(enh2, None, 0, 255, cv2.NORM_MINMAX)
 
-        # --- Binarización para colonias CLARAS ---
-        # Umbral global + adaptativo sumados (robustísimo)
+        # --- 4) Binarización robusta ---
         _, th_global = cv2.threshold(enh2, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         th_adapt = cv2.adaptiveThreshold(enh2, 255,
                                         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                         cv2.THRESH_BINARY,
                                         35, -2)
 
-        # Unión de ambos → colonias = blanco
         th = cv2.bitwise_and(th_global, th_adapt)
 
-        # --- Apertura para eliminar puntos sueltos ---
         kernel = np.ones((3, 3), np.uint8)
         th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=2)
-
-        # --- Cierre ligero para completar colonias ---
         th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-        # --- Encontrar contornos ---
-        contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # ===========================================================
+        # 🚀 ***SEPARACIÓN DE COLONIAS PEGADAS (WATERSHED SUAVE)***
+        # ===========================================================
+        dist = cv2.distanceTransform(th, cv2.DIST_L2, 5)
+
+        # Ajusta 0.35 → más bajo = separa más
+        _, sure_fg = cv2.threshold(dist, 0.35 * dist.max(), 255, 0)
+        sure_fg = np.uint8(sure_fg)
+
+        sure_bg = cv2.dilate(th, np.ones((3, 3), np.uint8), iterations=3)
+        unknown = cv2.subtract(sure_bg, sure_fg)
+
+        # Marcadores
+        _, markers = cv2.connectedComponents(sure_fg)
+        markers = markers + 1
+        markers[unknown == 255] = 0
+
+        # Watershed
+        color_img = cv2.cvtColor(enh2, cv2.COLOR_GRAY2BGR)
+        markers = cv2.watershed(color_img, markers)
+
+        # Máscara final separada
+        th_separado = np.zeros_like(th)
+        th_separado[markers > 1] = 255
+
+        # --- 5) Contornos ---
+        contours, _ = cv2.findContours(th_separado, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         valid_colonies = []
 
         for cnt in contours:
             area = cv2.contourArea(cnt)
-            if area < 40 or area > 9000:  # Tamaño medio
+            if area < 40 or area > 9000:
                 continue
 
             perimeter = cv2.arcLength(cnt, True)
@@ -1081,17 +1096,19 @@ class MultiStandardAnalyzer:
                 continue
 
             circularity = 4 * np.pi * area / (perimeter ** 2)
-            if circularity < 0.25:   # Colonias no perfectamente redondas
+            if circularity < 0.25:
                 continue
 
-            # Aceptar
+            # Mapa a coordenadas
             M = cv2.moments(cnt)
             if M["m00"] > 0:
                 cx = int(M["m10"] / M["m00"])
                 cy = int(M["m01"] / M["m00"])
                 valid_colonies.append((cx, cy, cnt))
 
-        # --- Dibujar ---
+        colonies_count = len(valid_colonies)
+
+        # --- 6) Dibujar resultado ---
         detected_img = img_rgb.copy()
         for i, (cx, cy, cnt) in enumerate(valid_colonies):
             cv2.drawContours(detected_img, [cnt], -1, (0, 255, 0), 2)
@@ -1099,22 +1116,25 @@ class MultiStandardAnalyzer:
             cv2.putText(detected_img, str(i + 1), (cx + 5, cy - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
 
-        colonies_count = len(valid_colonies)
+        cv2.rectangle(detected_img, (5, 5), (320, 45), (0, 0, 0), -1)
+        cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-        # --- Debug visual ---
+        # --- 7) Debug ---
         if debug:
             fig, ax = plt.subplots(2, 3, figsize=(16, 9))
             ax[0, 0].imshow(gray, cmap='gray'); ax[0, 0].set_title("Original")
             ax[0, 1].imshow(enh2, cmap='gray'); ax[0, 1].set_title("Enh")
-            ax[0, 2].imshow(th, cmap='gray'); ax[0, 2].set_title("Binarized")
-            ax[1, 0].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
-            ax[1, 0].set_title("Detected")
-            for a in ax.flat:
-                a.axis('off')
+            ax[0, 2].imshow(th, cmap='gray'); ax[0, 2].set_title("Binaria")
+            ax[1, 0].imshow(dist, cmap='jet'); ax[1, 0].set_title("Distance Transform")
+            ax[1, 1].imshow(th_separado, cmap='gray'); ax[1, 1].set_title("Separación (Watershed)")
+            ax[1, 2].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
+            ax[1, 2].set_title(f"Colonias detectadas: {colonies_count}")
+            for a in ax.flat: a.axis('off')
             st.pyplot(fig)
+            plt.close()
 
         return colonies_count, original_img, detected_img
-
 
 
 
