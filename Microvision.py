@@ -4240,12 +4240,12 @@ elif st.session_state["pagina"] == "reporte":
                 1: "resistencia parcial (crecimiento escaso < 10%)",
                 2: "resistencia limitada (crecimiento ligero 10-30%)",
                 3: "baja resistencia (crecimiento moderado 30-60%)",
-                4: "no resistente (crecimiento abundante > 60%)"
+                4: "no es resistente (crecimiento abundante > 60%)"
             }
             if rating is not None:
                 interpretacion = (
-                    f"El material fue ensayado frente a *{microorg_selec}* y obtuvo una calificación de {rating} en la escala ASTM G21-15, "
-                    f"con una cobertura fúngica del {coverage:.2f}%. Esto indica que el material es {escala_texto.get(rating, 'de resistencia no definida')}. "
+                    f"El textil fue ensayado frente a *{microorg_selec}* y obtuvo una calificación de {rating} en la escala ASTM G21-15, "
+                    f"con una cobertura fúngica del {coverage:.2f}%. Esto indica que {escala_texto.get(rating, 'de resistencia no definida')}. "
                 )
                 if rating <= 1:
                     interpretacion += "El material muestra excelente resistencia al ataque fúngico."
