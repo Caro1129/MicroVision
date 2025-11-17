@@ -3390,6 +3390,16 @@ elif st.session_state["pagina"] == "parametros":
                 log_value = float(log_raw)
             except:
                 log_value = 0 
+            
+            # --- Cálculo seguro del porcentaje ---
+            control_val = results.get("control_count", control)
+            tratada_val = results.get("treated_count", tratada)
+            # Calcular porcentaje de reducción (si los valores existen)
+            try:
+                porcentaje = (1 - (tratada / control)) * 100
+            except:
+                porcentaje = 0
+
             # Tabla resumen
             st.markdown("### 📋 Resumen Detallado")
             
