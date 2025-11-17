@@ -3014,7 +3014,7 @@ elif st.session_state["pagina"] == "parametros":
                 # CONTAR COLONIAS EN TRATADA
                 treated_count, treated_original, treated_detected = analyzer.count_colonies_opencv(
                     orig_img, 
-                    debug=True
+                    debug=False
                 )
                 
                 processed_img = treated_detected
@@ -3394,7 +3394,7 @@ elif st.session_state["pagina"] == "parametros":
                 'Valor': [
                     f"{media_control:.2f} ± {desviacion_control:.2f}" if len(control_results_list) > 1 else f"{media_control:.2f}",
                     f"{media:.2f} ± {desviacion:.2f}" if len(treated_results_list) > 1 else f"{media:.2f}",
-                    f"{log_red_display:.3f}",
+                    f"{log_reduction:.3f}",
                     f"{porcentaje:.1f}%",
                     str(len(control_results_list)),
                     str(len(treated_results_list))
