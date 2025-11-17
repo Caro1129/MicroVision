@@ -3394,7 +3394,7 @@ elif st.session_state["pagina"] == "parametros":
                 'Valor': [
                     f"{media_control:.2f} ± {desviacion_control:.2f}" if len(control_results_list) > 1 else f"{media_control:.2f}",
                     f"{media:.2f} ± {desviacion:.2f}" if len(treated_results_list) > 1 else f"{media:.2f}",
-                    f"{log_reduction:.3f}",
+                    f"{log_red:.3f}",
                     f"{porcentaje:.1f}%",
                     str(len(control_results_list)),
                     str(len(treated_results_list))
