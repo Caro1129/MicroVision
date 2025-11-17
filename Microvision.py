@@ -3883,6 +3883,57 @@ elif st.session_state["pagina"] == "reporte":
         else:
             st.info("No hay suficientes réplicas para generar la gráfica de error estándar.")
 
+    # ====================== GRÁFICA PARA JIS ======================
+    elif es_jis and control_results_list and treated_results_list:
+
+        st.markdown("### 📊 Gráfica Comparativa JIS Z 2801")
+
+        # Extraer valores
+        valores_control = [c['count'] for c in control_results_list]
+        valores_tratadas = [t['results'].get('treated_count', 0) for t in treated_results_list]
+
+        n_control = len(valores_control)
+        n_tratadas = len(valores_tratadas)
+
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        # ---- CASO 1: Solo 1 control y 1 tratada ----
+        if n_control == 1 and n_tratadas == 1:
+            ax.bar(["Control", "Tratada"],
+                [valores_control[0], valores_tratadas[0]],
+                edgecolor="black")
+
+            # Etiquetas arriba
+            ax.text(0, valores_control[0], f"{valores_control[0]}", ha="center", va="bottom", fontweight="bold")
+            ax.text(1, valores_tratadas[0], f"{valores_tratadas[0]}", ha="center", va="bottom", fontweight="bold")
+
+        # ---- CASO 2: Varias réplicas → barras con error ----
+        else:
+            media_control = np.mean(valores_control)
+            sd_control = np.std(valores_control, ddof=1) if len(valores_control) > 1 else 0
+
+            media_tratadas = np.mean(valores_tratadas)
+            sd_tratadas = np.std(valores_tratadas, ddof=1) if len(valores_tratadas) > 1 else 0
+
+            ax.bar(["Control", "Tratada"],
+                [media_control, media_tratadas],
+                yerr=[sd_control, sd_tratadas],
+                capsize=10,
+                edgecolor="black")
+
+            # Etiquetas arriba
+            ax.text(0, media_control, f"{media_control:.1f}", ha="center", va="bottom", fontweight="bold")
+            ax.text(1, media_tratadas, f"{media_tratadas:.1f}", ha="center", va="bottom", fontweight="bold")
+
+        # Configuración de la figura
+        ax.set_ylabel("Recuento (UFC)", fontsize=11)
+        ax.set_title("Comparación Control vs Tratada – JIS Z 2801", fontsize=12)
+        ax.grid(axis='y', linestyle='--', alpha=0.3)
+        ax.set_ylim(bottom=0)
+
+        st.pyplot(fig)
+        plt.close(fig)
+
    
     # SECCIÓN 3: CONCLUSIÓN 
     st.markdown("---")
