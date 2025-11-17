@@ -3393,10 +3393,10 @@ elif st.session_state["pagina"] == "parametros":
             
             # --- Cálculo seguro del porcentaje ---
             control_val = results.get("control_count", 0)
-            tratada_val = results.get("treated_count", tratada)
+            tratada_val = results.get("treated_count", 0)
             # Calcular porcentaje de reducción (si los valores existen)
             try:
-                porcentaje = (1 - (tratada / control_val)) * 100
+                porcentaje = (1 - (tratada_val / control_val)) * 100
             except:
                 porcentaje = 0
 
