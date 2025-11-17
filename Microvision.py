@@ -3425,36 +3425,7 @@ elif st.session_state["pagina"] == "parametros":
             df_resumen = pd.DataFrame(data_resumen)
             st.dataframe(df_resumen, use_container_width=True, hide_index=True)
             
-            # Interpretación final con estilo
-            interpretacion_final = st.session_state.get("log_interpretation", "")
-            cumple = st.session_state.get("cumple_jis", False)
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            
-            if cumple:
-                st.markdown(f"""
-                    <div style='background-color: #d4edda; padding: 20px; border-radius: 10px; 
-                                border-left: 5px solid #28a745;'>
-                        <h3 style='color: #155724; margin: 0;'>✅ CUMPLE con JIS Z 2801</h3>
-                        <p style='color: #155724; font-size: 16px; margin: 10px 0 0 0;'>
-                            {interpretacion_final}
-                        </p>
-                    </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.markdown(f"""
-                    <div style='background-color: #f8d7da; padding: 20px; border-radius: 10px; 
-                                border-left: 5px solid #dc3545;'>
-                        <h3 style='color: #721c24; margin: 0;'>❌ NO CUMPLE con JIS Z 2801</h3>
-                        <p style='color: #721c24; font-size: 16px; margin: 10px 0 0 0;'>
-                            {interpretacion_final}
-                        </p>
-                        <p style='color: #721c24; font-size: 14px; margin: 10px 0 0 0;'>
-                            <em>Nota: Se requiere R ≥ 2.0 para cumplir con la norma</em>
-                        </p>
-                    </div>
-                """, unsafe_allow_html=True)
-        
+           
         # 📊 CASO 2: OTRAS NORMAS (Solo tratadas)
         else:
             if valores_tratadas:
