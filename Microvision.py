@@ -37,500 +37,205 @@ from datetime import datetime
 
 
 def generar_pdf_reporte_completo():
-    """Genera PDF completo con imágenes, gráficas y resultados"""
+    """Genera un PDF compacto, elegante y con toda la información del reporte."""
+
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer,
         pagesize=A4,
-        rightMargin=2*cm,
-        leftMargin=2*cm,
-        topMargin=2*cm,
-        bottomMargin=2*cm
+        leftMargin=2*cm, rightMargin=2*cm,
+        topMargin=1.5*cm, bottomMargin=1.5*cm
     )
+
     story = []
     styles = getSampleStyleSheet()
-    temp_files = []  # Para limpiar archivos temporales
+    temp_files = []
 
-    # === ESTILOS ===
-    estilo_titulo = ParagraphStyle(
-        name="Titulo",
-        parent=styles["Heading1"],
-        fontSize=18,
-        alignment=1,
-        spaceAfter=20,
-        textColor=colors.HexColor("#2E4053")
-    )
+    # --- Estilos elegantes ---
+    titulo = ParagraphStyle("Titulo", parent=styles["Heading1"], fontSize=18, alignment=1, textColor=colors.HexColor("#1A5276"))
+    subtitulo = ParagraphStyle("Subtitulo", parent=styles["Heading2"], fontSize=13, textColor="#154360", spaceAfter=8)
+    normal_just = ParagraphStyle("Just", parent=styles["BodyText"], alignment=4, fontSize=11, leading=14)
 
-    estilo_subtitulo = ParagraphStyle(
-        name="Subtitulo",
-        parent=styles["Heading2"],
-        fontSize=13,
-        textColor=colors.HexColor("#1A5276"),
-        spaceBefore=10,
-        spaceAfter=10
-    )
+    # ============================================================
+    # HELPER: Añadir imágenes en filas de 2
+    # ============================================================
+    def agregar_fila_imagenes(story, lista_imagenes, temp_files):
+        fila = []
+        for img_array, caption in lista_imagenes:
 
-    estilo_justificado = ParagraphStyle(
-        name="Justify",
-        parent=styles["Normal"],
-        alignment=4,
-        leading=15,
-        fontSize=11
-    )
+            if img_array is None:
+                continue
 
-    # === ENCABEZADO ===
-    story.append(Paragraph("REPORTE DE ANALISIS MICROVISION", estilo_titulo))
-    fecha = datetime.now().strftime("%d/%m/%Y - %H:%M")
-    story.append(Paragraph(f"<b>Fecha de generacion:</b> {fecha}", styles["Normal"]))
-    story.append(Spacer(1, 1*cm))
-
-    # === 1. INFORMACIÓN DEL ENSAYO ===
-    norma = st.session_state.get("norma", "No especificada")
-    microorg = st.session_state.get("microorg_selec", "No especificado")
-    medio = st.session_state.get("medio", "medio")
-    tiempo = st.session_state.get("tiempo", "tiempo no definido")
-    temperatura = st.session_state.get("temperatura", "temperatura no definida")
-
-    descripcion_texto = st.session_state.get("descripcion", "Descripción no disponible")
-    # Limpiar HTML de la descripción
-    descripcion_texto = descripcion_texto.replace('<div style="text-align: justify;">', '')
-    descripcion_texto = descripcion_texto.replace('</div>', '')
-    descripcion_texto = descripcion_texto.replace('<br><br>', ' ')
-
-    story.append(Paragraph("1. Descripcion del ensayo", estilo_subtitulo))
-    story.append(Paragraph(descripcion_texto, estilo_justificado))
-    story.append(Spacer(1, 0.8*cm))
-
-    # === 2. MUESTRAS ANALIZADAS (IMÁGENES) ===
-    story.append(Paragraph("2. Muestras analizadas", estilo_subtitulo))
-    
-    es_jis = 'JIS' in str(norma) or 'Z2801' in str(norma)
-    treated_results_list = st.session_state.get("treated_results_list", [])
-    control_results_list = st.session_state.get("control_results_list", [])
-
-    # Función auxiliar para agregar imágenes al PDF
-    def agregar_imagen_al_pdf(img_array, caption, story, temp_files):
-
-        # Obtener estilos para el pie de foto
-        styles = getSampleStyleSheet()
-
-        # --- VERIFICACIÓN CRÍTICA DEL ARRAY ---
-        if img_array is None:
-            print(f"❌ DEBUG: Imagen nula para: {caption}")
-            return
-        if not isinstance(img_array, np.ndarray):
-            print(f"❌ DEBUG: Imagen para '{caption}' NO es np.ndarray. Tipo: {type(img_array)}")
-            return
-        if img_array.size == 0:
-            print(f"❌ DEBUG: Array de imagen vacío para: {caption}")
-            return
-        # ----------------------------------------
-
-        try:
-            # 1. Conversión de Color: De BGR (OpenCV por defecto) a RGB (PIL)
-            # Si las imágenes son en escala de grises o ya RGB, esta línea puede fallar.
-            # Si falla, comenta esta línea.
-            if len(img_array.shape) == 3:
+            # Convertir a PIL
+            try:
                 img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
-            else:
-                img_rgb = img_array # Asumir escala de grises o formato correcto
+            except:
+                img_rgb = img_array
 
-            # 2. Convertir a objeto PIL (Pillow)
-            pil_img = PILImage.fromarray(img_rgb)
-            
-            # 3. Guardar temporalmente como PNG
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-            pil_img.save(tmp.name, 'PNG') 
-            temp_files.append(tmp.name) # Guardar referencia para eliminación posterior
+            pil_img = Image.fromarray(img_rgb)
 
-            print(f"✅ DEBUG: Imagen temporal creada en: {tmp.name}")
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            pil_img.save(tmp.name)
+            temp_files.append(tmp.name)
 
-            # 4. Insertar en ReportLab
-            img_reportlab = RLImage(
-                tmp.name, 
-                width=8*cm, 
-                height=6*cm,
-                # Asegúrate de que las dimensiones sean razonables
-                # Tal vez necesitas usar 'preserveAspectRatio=True' si la imagen se ve distorsionada
-                # preserveAspectRatio=True, 
-                # kind='bound'
-            )
-            
-            story.append(img_reportlab)
-            story.append(Paragraph(f"<i>{caption}</i>", styles["Normal"]))
-            story.append(Spacer(1, 0.5 * cm))
+            img_r = RLImage(tmp.name, width=6*cm, height=4.5*cm)
+            celda = [img_r, Paragraph(f"<i>{caption}</i>", styles["BodyText"])]
+            fila.append(celda)
 
-        except Exception as e:
-            print(f"❌ ERROR CRÍTICO al agregar imagen '{caption}': {e}")
-            # Si llegamos aquí, el array ES un numpy array, pero la conversión de color o PIL falló.
-            story.append(Paragraph(f"**[ERROR AL CARGAR IMAGEN: {caption}]**", styles["Error"]))
+        if fila:
+            tabla_img = Table(fila, colWidths=[7*cm]*len(fila))
+            tabla_img.setStyle(TableStyle([
+                ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                ("BOTTOMPADDING", (0,0), (-1,-1), 6),
+            ]))
+            story.append(tabla_img)
+            story.append(Spacer(1, 0.3*cm))
 
+    # ============================================================
+    # ENCABEZADO
+    # ============================================================
+    story.append(Paragraph("REPORTE DE ANALISIS MICROVISION", titulo))
+    fecha = datetime.now().strftime("%d/%m/%Y - %H:%M")
+    story.append(Paragraph(f"<b>Fecha de generación:</b> {fecha}", styles["BodyText"]))
+    story.append(Spacer(1, 0.6*cm))
 
-        # IMÁGENES DE CONTROL (si aplica)
-        if es_jis and control_results_list:
-            story.append(Paragraph("<b>Muestras CONTROL</b>", styles["Heading3"]))
-            
-            for i, replica in enumerate(control_results_list[:3]):  # Máximo 3 imágenes
-                agregar_imagen_al_pdf(
-                    replica['original'],
-                    #f"Control replica {i+1} | Colonias: {replica.get('count', 'N/A')}",
-                    story,
-                    temp_files
-                )
-            
-            story.append(Spacer(1, 0.5*cm))
+    # ============================================================
+    # INFORMACIÓN DEL ENSAYO
+    # ============================================================
+    norma = st.session_state.get("norma", "No especificada")
+    descripcion = st.session_state.get("descripcion", "").replace("<div style='text-align: justify;'>", "").replace("</div>", "")
 
-        # IMÁGENES TRATADAS
-        if treated_results_list:
-            titulo_tratadas = "<b>Muestras TRATADAS</b>" if es_jis else "<b>Muestras analizadas</b>"
-            story.append(Paragraph(titulo_tratadas, styles["Heading3"]))
-            
-            for i, replica in enumerate(treated_results_list[:3]):  # Máximo 3 imágenes
-                caption = f"Replica tratada {i+1}"
-                
-                # Agregar métrica según norma
-                results = replica.get('results', {})
-                if 'AATCC' in norma:
-                    halo = results.get('inhibition_halo_mm', 0)
-                    caption += f" | Halo: {halo:.2f} mm"
-                elif 'G21' in norma:
-                    cobertura = results.get('coverage_percentage', 0)
-                    caption += f" | Cobertura: {cobertura:.2f}%"
-                elif 'JIS' in norma:
-                    count = results.get('treated_count', 0)
-                    #caption += f" | Colonias: {count}"
-                
-                agregar_imagen_al_pdf(
-                    replica['original'],
-                    caption,
-                    story,
-                    temp_files
-                )
-        
-        story.append(Spacer(1, 0.5*cm))
-        story.append(PageBreak())
+    story.append(Paragraph("1. Descripción del ensayo", subtitulo))
+    story.append(Paragraph(descripcion, normal_just))
+    story.append(Spacer(1, 0.4*cm))
 
-        # === 3. RESULTADOS CON TABLA ===
-        story.append(Paragraph("3. Resultados del analisis", estilo_subtitulo))
+    # ============================================================
+    # IMÁGENES AGRUPADAS
+    # ============================================================
+    story.append(Paragraph("2. Muestras analizadas", subtitulo))
 
-        valores_replicas = st.session_state.get("valores_replicas", [])
-        treated_results_list = st.session_state.get("treated_results_list", [])
-        
-        # Determinar qué tipo de tabla crear según la norma
-        if 'ASTM_G21' in norma or 'G21' in norma:
-            # TABLA ESPECÍFICA PARA ASTM G21-15 con Rating y Cobertura
-            if treated_results_list and len(treated_results_list) > 0:
-                datos_tabla = [["Replica", "Cobertura (%)", "Rating ASTM (0-4)", "Interpretacion"]]
-                
-                for i, replica in enumerate(treated_results_list):
-                    results = replica.get('results', {})
-                    cobertura = results.get('coverage_percentage', 0)
-                    rating = results.get('astm_g21_rating', 0)
-                    
-                    # Interpretación breve según rating
-                    if rating == 0:
-                        interp = "Sin crecimiento"
-                    elif rating == 1:
-                        interp = "Trazas"
-                    elif rating == 2:
-                        interp = "Ligero"
-                    elif rating == 3:
-                        interp = "Moderado"
-                    else:
-                        interp = "Severo"
-                    
-                    datos_tabla.append([
-                        f"Replica {i+1}",
-                        f"{cobertura:.2f}",
-                        str(rating),
-                        interp
-                    ])
-                
-                # Agregar estadísticas de cobertura
-                media = st.session_state.get("media", 0)
-                desviacion = st.session_state.get("desviacion", 0)
-                
-                datos_tabla.append([
-                    "Media",
-                    f"{media:.2f}",
-                    "-",
-                    "-"
-                ])
-                
-                if len(treated_results_list) > 1:
-                    datos_tabla.append([
-                        "Desv. Estandar",
-                        f"{desviacion:.2f}",
-                        "-",
-                        "-"
-                    ])
-                
-                tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[4*cm, 3.5*cm, 4*cm, 4.5*cm])
-                tabla.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("BACKGROUND", (0, 1), (-1, -len(treated_results_list)-1), colors.whitesmoke),
-                    ("BACKGROUND", (0, -2), (-1, -1), colors.HexColor("#E8F5E9")),
-                    ("FONTSIZE", (0, 0), (-1, -1), 9)
-                ]))
-                story.append(tabla)
-                story.append(Spacer(1, 0.8*cm))
-        
-        elif 'JIS' in norma or 'Z2801' in norma:
-            # TABLA ESPECÍFICA PARA JIS Z 2801
-            if treated_results_list and len(treated_results_list) > 0:
-                datos_tabla = [["Replica", "Colonias Tratada", "Reduccion Log", "Cumple (R>=2)"]]
-                
-                for i, replica in enumerate(treated_results_list):
-                    results = replica.get('results', {})
-                    count = results.get('treated_count', 0)
-                    log_red = results.get('log_reduction', 0)
-                    cumple = "Si" if isinstance(log_red, (int, float)) and log_red >= 2.0 else "No"
-                    
-                    log_red_str = f"{log_red:.2f}" if isinstance(log_red, (int, float)) else str(log_red)
-                    
-                    datos_tabla.append([
-                        f"Replica {i+1}",
-                        str(count),
-                        log_red_str,
-                        cumple
-                    ])
-                
-                # Media si hay múltiples réplicas
-                if len(treated_results_list) > 1:
-                    media = st.session_state.get("media", 0)
-                    datos_tabla.append([
-                        "Promedio",
-                        "-",
-                        f"{media:.2f}",
-                        "-"
-                    ])
-                
-                tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
-                tabla.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke)
-                ]))
-                story.append(tabla)
-                story.append(Spacer(1, 0.8*cm))
-        
-        elif 'AATCC' in norma or 'TM147' in norma:
-            # TABLA PARA AATCC TM147
-            if treated_results_list and len(treated_results_list) > 0:
-                datos_tabla = [["Replica", "Halo (mm)", "Inhibicion", "Efectividad"]]
-                
-                for i, replica in enumerate(treated_results_list):
-                    results = replica.get('results', {})
-                    halo = results.get('inhibition_halo_mm', 0)
-                    tiene_halo = results.get('has_inhibition', False)
-                    efectivo = "Efectivo" if halo > 1.0 else "No efectivo"
-                    
-                    datos_tabla.append([
-                        f"Replica {i+1}",
-                        f"{halo:.2f}",
-                        "Si" if tiene_halo else "No",
-                        efectivo
-                    ])
-                
-                # Media
-                if len(treated_results_list) > 1:
-                    media = st.session_state.get("media", 0)
-                    datos_tabla.append([
-                        "Promedio",
-                        f"{media:.2f}",
-                        "-",
-                        "-"
-                    ])
-                
-                tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
-                tabla.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke)
-                ]))
-                story.append(tabla)
-                story.append(Spacer(1, 0.8*cm))
-        
-        elif 'E1428' in norma or 'ASTM_E1428' in norma:
-            # TABLA PARA ASTM E1428
-            if treated_results_list and len(treated_results_list) > 0:
-                datos_tabla = [["Replica", "Cobertura (%)", "Crecimiento", "Resistencia"]]
-                
-                for i, replica in enumerate(treated_results_list):
-                    results = replica.get('results', {})
-                    cobertura = results.get('coverage_percentage', 0)
-                    growth = results.get('has_visible_growth', False)
-                    resistencia = results.get('material_resistance', 'Desconocido')
-                    
-                    datos_tabla.append([
-                        f"Replica {i+1}",
-                        f"{cobertura:.2f}",
-                        "Si" if growth else "No",
-                        resistencia
-                    ])
-                
-                # Media
-                if len(treated_results_list) > 1:
-                    media = st.session_state.get("media", 0)
-                    datos_tabla.append([
-                        "Promedio",
-                        f"{media:.2f}",
-                        "-",
-                        "-"
-                    ])
-                
-                tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[4*cm, 4*cm, 4*cm, 4*cm])
-                tabla.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke)
-                ]))
-                story.append(tabla)
-                story.append(Spacer(1, 0.8*cm))
-        
-        else:
-            # TABLA GENÉRICA (fallback)
-            if valores_replicas and len(valores_replicas) > 0:
-                datos_tabla = [["Replica", "Valor"]]
-                
-                for i, v in enumerate(valores_replicas):
-                    datos_tabla.append([f"Replica {i+1}", f"{v:.2f}"])
-                
-                media = st.session_state.get("media", 0)
-                desviacion = st.session_state.get("desviacion", 0)
-                
-                datos_tabla.append(["Media", f"{media:.2f}"])
-                if len(valores_replicas) > 1:
-                    datos_tabla.append(["Desviacion estandar", f"{desviacion:.2f}"])
+    treated_list = st.session_state.get("treated_results_list", [])
+    control_list = st.session_state.get("control_results_list", [])
 
-                tabla = Table(datos_tabla, hAlign="CENTER", colWidths=[8*cm, 8*cm])
-                tabla.setStyle(TableStyle([
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#D5D8DC")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.whitesmoke),
-                    ("BACKGROUND", (0, -2), (-1, -1), colors.HexColor("#E8F5E9"))
-                ]))
-                story.append(tabla)
-                story.append(Spacer(1, 0.8*cm))
+    # --- CONTROL ---
+    if control_list:
+        story.append(Paragraph("<b>Control</b>", styles["Heading3"]))
+        fila = []
+        for i, rep in enumerate(control_list[:2]):
+            fila.append((rep["original"], f"Control {i+1}"))
+        agregar_fila_imagenes(story, fila, temp_files)
 
-            # === GRÁFICA (si hay múltiples réplicas) ===
-            if len(valores_replicas) > 1:
-                story.append(Paragraph("<b>Representacion grafica</b>", styles["Heading3"]))
-                
-                try:
-                    # Crear gráfica
-                    fig, ax = plt.subplots(figsize=(8, 5))
-                    
-                    error_estandar = desviacion / (len(valores_replicas) ** 0.5)
-                    
-                    ax.bar(1, media, yerr=error_estandar, capsize=10, 
-                        color="#667eea", edgecolor="black", linewidth=2)
-                    
-                    ax.set_xticks([1])
-                    ax.set_xticklabels(["Promedio"])
-                    ax.set_ylabel("Valor medio", fontsize=11)
-                    ax.set_title("Media con error estandar", fontsize=12, fontweight='bold')
-                    ax.grid(axis='y', alpha=0.3, linestyle='--')
-                    ax.set_ylim(bottom=0)
-                    
-                    # Agregar valor sobre la barra
-                    ax.text(1, media, f'{media:.2f}', ha='center', va='bottom', 
-                        fontweight='bold', fontsize=12)
-                    
-                    plt.tight_layout()
-                    
-                    # Guardar gráfica
-                    tmp_graph = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
-                    plt.savefig(tmp_graph.name, bbox_inches='tight', dpi=150)
-                    plt.close(fig)
-                    temp_files.append(tmp_graph.name)
-                    
-                    # Agregar al PDF
-                    from reportlab.platypus import Image as RLImage
-                    img = RLImage(tmp_graph.name, width=14*cm, height=9*cm)
-                    story.append(img)
-                    story.append(Spacer(1, 0.5*cm))
-                    
-                except Exception as e:
-                    print(f"Error al generar gráfica: {e}")
-                    story.append(Paragraph("[Error al generar grafica]", styles["Normal"]))
+    # --- TRATADAS ---
+    if treated_list:
+        story.append(Paragraph("<b>Muestras Tratadas</b>", styles["Heading3"]))
+        fila = []
+        for i, rep in enumerate(treated_list[:2]):
+            fila.append((rep["original"], f"Tratada {i+1}"))
+        agregar_fila_imagenes(story, fila, temp_files)
 
-        story.append(PageBreak())
+    story.append(Spacer(1, 0.4*cm))
 
-        # === 4. TEST T (si existe) ===
-        test_t_results = st.session_state.get("test_t_results", None)
-        if test_t_results and test_t_results.get('suficientes_datos', False):
-            agregar_test_t_pdf_tabla(story, test_t_results, temp_files, styles)
-            story.append(PageBreak())
+    # ============================================================
+    # TABLAS DE RESULTADOS (Compactas)
+    # ============================================================
+    story.append(Paragraph("3. Resultados del análisis", subtitulo))
 
-        # === 5. CONCLUSIÓN ===
-        story.append(Paragraph("4. Conclusion", estilo_subtitulo))
-        
-        interpretacion = st.session_state.get("interpretacion", "No disponible")
-        # Limpiar HTML
-        interpretacion = interpretacion.replace('<div style="background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-top: 10px; text-align: justify;">', '')
-        interpretacion = interpretacion.replace('</div>', '')
-        interpretacion = interpretacion.replace('<strong>', '<b>').replace('</strong>', '</b>')
-        interpretacion = interpretacion.replace('<em>', '<i>').replace('</em>', '</i>')
-        interpretacion = interpretacion.replace('<br><br>', '<br/>')
-        
-        story.append(Paragraph(interpretacion, estilo_justificado))
-        story.append(Spacer(1, 1*cm))
+    valores_replicas = st.session_state.get("valores_replicas", [])
+    media = st.session_state.get("media", 0)
+    desviacion = st.session_state.get("desviacion", 0)
 
-        # === PIE DE PÁGINA ===
-        story.append(Spacer(1, 2*cm))
-        pie = f"""
-        <para alignment="center" fontSize="9" textColor="#666666">
-        <b>MicroVision - Sistema de Analisis Microbiologico Automatizado</b><br/>
-        Reporte generado automaticamente el {fecha}<br/>
-        Pontificia Universidad Javeriana
-        </para>
-        """
-        story.append(Paragraph(pie, styles["Normal"]))
+    # --- TABLA PRINCIPAL ---
+    datos = [["Réplica", "Valor"]]
+    for i, v in enumerate(valores_replicas):
+        datos.append([f"{i+1}", f"{v:.2f}"])
 
-        # === CONSTRUIR PDF ===
+    if len(valores_replicas) > 1:
+        datos.append(["Media", f"{media:.2f}"])
+        datos.append(["Desviación estándar", f"{desviacion:.2f}"])
+
+    tabla = Table(datos, hAlign="CENTER", colWidths=[6*cm, 6*cm])
+    tabla.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#D6DBDF")),
+        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+        ("ALIGN", (0,0), (-1,-1), "CENTER"),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold")
+    ]))
+    story.append(tabla)
+    story.append(Spacer(1, 0.4*cm))
+
+    # ============================================================
+    # GRÁFICA (sin salto de página)
+    # ============================================================
+    if len(valores_replicas) > 1:
         try:
-            doc.build(story)
-            buffer.seek(0)
-            
-            # Limpiar archivos temporales
-            for tmp_file in temp_files:
-                try:
-                    os.remove(tmp_file)
-                except:
-                    pass
-            
-            return buffer
-            
-        except Exception as e:
-            print(f"Error al construir PDF: {e}")
-            # Limpiar archivos temporales en caso de error
-            for tmp_file in temp_files:
-                try:
-                    os.remove(tmp_file)
-                except:
-                    pass
-            raise
+            fig, ax = plt.subplots(figsize=(4.5, 3))
+            error_est = desviacion / len(valores_replicas)**0.5
+            ax.bar(["Media"], [media], yerr=[error_est], capsize=6)
+            ax.set_ylabel("Valor")
+            fig.tight_layout()
 
-    doc.build(story)  # 1. Construye el PDF usando el contenido de 'story'
-    buffer.seek(0)    # 2. Rebobina el buffer al inicio para su lectura
-    return buffer     # 3. Devuelve el buffer a Streamlit
+            tmp_graph = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            plt.savefig(tmp_graph.name, dpi=120)
+            plt.close(fig)
+            temp_files.append(tmp_graph.name)
+
+            story.append(RLImage(tmp_graph.name, width=10*cm, height=6*cm))
+            story.append(Spacer(1, 0.4*cm))
+        except:
+            story.append(Paragraph("Error al generar gráfica.", styles["BodyText"]))
+
+    # ============================================================
+    # TEST T (compacto)
+    # ============================================================
+    test = st.session_state.get("test_t_results", {})
+    if test and test.get("suficientes_datos", False):
+        story.append(Paragraph("ANÁLISIS ESTADÍSTICO (TEST T)", subtitulo))
+        datos_t = [
+            ["Estadístico t", f"{test['t_statistic']:.4f}"],
+            ["Valor p", f"{test['p_value']:.4f}"],
+            ["gl", str(test['grados_libertad'])],
+            ["Significativo", "Sí" if test['es_significativo'] else "No"]
+        ]
+        tabla_t = Table(datos_t, colWidths=[6*cm, 6*cm])
+        tabla_t.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#D5D8DC")),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.grey)
+        ]))
+        story.append(tabla_t)
+        story.append(Spacer(1, 0.4*cm))
+
+    # ============================================================
+    # CONCLUSIÓN
+    # ============================================================
+    story.append(Paragraph("4. Conclusión", subtitulo))
+    interpretacion = st.session_state.get("interpretacion", "No disponible")
+    story.append(Paragraph(interpretacion, normal_just))
+
+    # ============================================================
+    # PIE DE PÁGINA
+    # ============================================================
+    story.append(Spacer(1, 0.6*cm))
+    pie = f"""
+    <para alignment="center" fontSize="9" textColor="#777777">
+    MicroVision – Sistema de Análisis Microbiológico Automatizado<br/>
+    Reporte generado el {fecha}
+    </para>
+    """
+    story.append(Paragraph(pie, styles["BodyText"]))
+
+    # ============================================================
+    # GENERAR PDF
+    # ============================================================
+    doc.build(story)
+    buffer.seek(0)
+
+    # Limpieza temp
+    for t in temp_files:
+        try: os.remove(t)
+        except: pass
+
+    return buffer
 
 def generar_conclusion_texto():
     """Genera texto de conclusión basado en los resultados"""
