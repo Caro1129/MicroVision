@@ -2901,27 +2901,25 @@ elif st.session_state["pagina"] == "parametros":
             st.info(f" Usando escala manual: {mm_per_pixel:.5f} mm/pixel")
 
 
-        #  PROCESAR CONTROLES (solo si existen) 
-        # ===== PROCESAR CONTROLES =====
+        # ===== PROCESAR CONTROLES (solo si existen) =====
         if paths_control:
             st.markdown("## 📊 Imágenes de CONTROL")
             for idx, control_path in enumerate(paths_control):
                 # Cargar y procesar
                 ctrl_img_rgb, ctrl_pca, ctrl_ms = analyzer.load_and_process_image(control_path)
                 
-                # CONTAR COLONIAS (con debug opcional)
+                # CONTAR COLONIAS
                 ctrl_count, ctrl_original, ctrl_detected = analyzer.count_colonies_opencv(
                     ctrl_img_rgb,
                     debug=False
                 )
-
                 
                 # Guardar resultados
                 control_results_list.append({
                     'original': ctrl_img_rgb,
                     'pca': ctrl_pca,
                     'meanshift': ctrl_ms,
-                    'processed': ctrl_detected,  # ← Imagen ya coloreada
+                    'processed': ctrl_detected,
                     'count': ctrl_count
                 })
 
@@ -2933,23 +2931,24 @@ elif st.session_state["pagina"] == "parametros":
                 st.metric("Colonias detectadas", ctrl_count)
                 st.markdown("---")
 
-            # Guardar primera réplica de control en session_state
-            control_img_rgb = control_results_list[0]['original']
-            control_processed = control_results_list[0]['processed']
-            st.session_state["control_img_rgb"] = control_img_rgb
-            st.session_state["control_processed"] = control_processed
+            # Guardar en session_state
+            st.session_state["control_results_list"] = control_results_list
 
-        promedio_control = np.mean([c['count'] for c in control_results_list]) if control_results_list else None
+        # ===== CALCULAR PROMEDIO DE CONTROL =====
+        promedio_control = None
+        if control_results_list:
+            valores_control = [c['count'] for c in control_results_list]
+            promedio_control = float(np.mean(valores_control))
+            print(f"✅ Promedio de CONTROL: {promedio_control:.2f} UFC (n={len(valores_control)})")
 
         # ===== PROCESAR TRATADAS =====
-        st.markdown("##  Imágenes TRATADAS")
+        st.markdown("## 🔬 Imágenes TRATADAS")
 
         for idx, path_tratada in enumerate(paths_tratadas):
-    
             if 'mm_per_pixel' not in locals() or mm_per_pixel is None:
                 mm_per_pixel = 0.05
 
-            # ⭐ CORRECCIÓN: Una sola llamada con variables correctas
+            # Analizar según norma
             results, orig_img, pca, ms, _, _, _, _ = analyzer.analyze_by_standard(
                 path_tratada, microorg_selec, norma, mm_per_pixel,
                 control_count=promedio_control
@@ -3012,39 +3011,21 @@ elif st.session_state["pagina"] == "parametros":
                     print("⚠️ No se detectó crecimiento fúngico\n")        
 
             elif 'JIS' in norma or 'Z2801' in norma:
-                import cv2
-                import numpy as np
-
-                if paths_tratadas and len(paths_tratadas) > 0:
-                    # Cargar la primera imagen tratada guardada
-                    img_path = paths_tratadas[0]
-                    orig = cv2.imread(img_path)
-                    orig = cv2.cvtColor(orig, cv2.COLOR_BGR2RGB)
-
-                    # Procesar con el analizador
-                    treated_count, treated_original, treated_colonies = analyzer.count_colonies_opencv(orig)
-                    processed_img = treated_colonies  # imagen coloreada
-
-                    # --- Bloque seguro para dibujar contornos ---
-                    valid_contours = []
-
-                    if treated_colonies is not None:
-                        for item in treated_colonies:
-                            if isinstance(item, np.ndarray) and item.ndim == 2:
-                                contours, _ = cv2.findContours(item, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                                valid_contours.extend(contours)
-                            elif isinstance(item, np.ndarray) and item.ndim == 3 and item.shape[1] == 1:
-                                valid_contours.append(item)
-                    else:
-                        print("⚠️ treated_colonies es None")
-
-                    if len(valid_contours) > 0:
-                        cv2.drawContours(processed_img, valid_contours, -1, (255, 0, 0), 2)
-                    else:
-                        print("⚠️ No hay contornos válidos para dibujar en la imagen.")
-                else:
-                    st.error("⚠️ No se encontró ninguna imagen tratada cargada.")
-
+                # CONTAR COLONIAS EN TRATADA
+                treated_count, treated_original, treated_detected = analyzer.count_colonies_opencv(
+                    orig_img, 
+                    debug=False
+                )
+                
+                processed_img = treated_detected
+                
+                # ❌ NO CALCULAR REDUCCIÓN LOG AQUÍ (se hace después)
+                # Solo guardar el conteo
+                results.update({
+                    'treated_count': treated_count,
+                    'control_count': promedio_control if promedio_control else 'Pendiente',
+                    'log_reduction': 'Se calculará después'
+                })
             elif 'E1428' in norma:
                 coverage_percentage, colored_img, has_growth = analyzer.analyze_streptomyces_growth(orig_img, ms)
 
@@ -3117,15 +3098,14 @@ elif st.session_state["pagina"] == "parametros":
                 c1.metric("Cobertura (%)", f"{cobertura:.2f}")
                 c2.metric("Rating", rating)
                 c3.markdown(f"**Interpretación:** {results.get('interpretation', '')}")
+            
             elif 'JIS' in norma or 'Z2801' in norma:
                 treated_count = results.get('treated_count', 0)
-                log_red = results.get('log_reduction', 0)
                 c1, c2 = st.columns(2)
                 c1.metric("Colonias TRATADA", treated_count)
-                if isinstance(log_red, (int, float)):
-                    c2.metric("Reducción logarítmica", f"{log_red:.2f}")
-                else:
-                    c2.metric("Reducción logarítmica", str(log_red))
+                c2.metric("Control", f"{promedio_control:.0f}" if promedio_control else "Pendiente")
+                
+           
             elif 'E1428' in norma:
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Cobertura (%)", f"{results.get('coverage_percentage', 0):.2f}")
@@ -3133,6 +3113,74 @@ elif st.session_state["pagina"] == "parametros":
                 c3.markdown(f"**Interpretación:** {results.get('interpretation', '')}")
             
             st.markdown("---")
+
+        # ============================================================
+        # 🎯 CALCULAR REDUCCIÓN LOGARÍTMICA FINAL (SOLO PARA JIS)
+        # ============================================================
+        if 'JIS' in norma or 'Z2801' in norma:
+            if control_results_list and treated_results_list:
+                # Extraer valores
+                valores_control = [c['count'] for c in control_results_list]
+                valores_tratadas = [r['results']['treated_count'] for r in treated_results_list]
+                
+                n_control = len(valores_control)
+                n_tratadas = len(valores_tratadas)
+                
+                print("\n" + "="*60)
+                print("🧪 CÁLCULO DE REDUCCIÓN LOGARÍTMICA")
+                print(f"   Réplicas CONTROL: {n_control}")
+                print(f"   Réplicas TRATADAS: {n_tratadas}")
+                print("="*60)
+                
+                # CASO 1: 1 control + 1 tratada
+                if n_control == 1 and n_tratadas == 1:
+                    control_final = valores_control[0]
+                    tratada_final = valores_tratadas[0]
+                    
+                    log_red_final, interpretacion_log, cumple_jis = calcular_reduccion_logaritmica(
+                        control_final, 
+                        tratada_final
+                    )
+                    
+                    print(f"\n📊 CASO: 1 control + 1 tratada")
+                    print(f"   Control: {control_final} UFC")
+                    print(f"   Tratada: {tratada_final} UFC")
+                    print(f"   Reducción Log: {log_red_final:.3f}")
+                    
+                    # Actualizar el único resultado tratado
+                    treated_results_list[0]['results']['log_reduction'] = round(log_red_final, 2)
+                
+                # CASO 2: Múltiples réplicas
+                else:
+                    promedio_control_final = float(np.mean(valores_control))
+                    promedio_tratada_final = float(np.mean(valores_tratadas))
+                    
+                    log_red_final, interpretacion_log, cumple_jis = calcular_reduccion_logaritmica(
+                        promedio_control_final, 
+                        promedio_tratada_final
+                    )
+                    
+                    print(f"\n📊 CASO: Múltiples réplicas")
+                    print(f"   Promedio Control: {promedio_control_final:.2f} UFC (n={n_control})")
+                    print(f"   Promedio Tratada: {promedio_tratada_final:.2f} UFC (n={n_tratadas})")
+                    print(f"   Reducción Log: {log_red_final:.3f}")
+                    
+                    # Actualizar TODOS los resultados tratados con la reducción log promedio
+                    for replica in treated_results_list:
+                        replica['results']['log_reduction'] = round(log_red_final, 2)
+                
+                # Guardar en session_state
+                st.session_state["log_reduction_final"] = log_red_final
+                st.session_state["log_interpretation"] = interpretacion_log
+                st.session_state["cumple_jis"] = cumple_jis
+                
+                print(f"   Interpretación: {interpretacion_log}")
+                print(f"   Cumple JIS: {'✅ SÍ' if cumple_jis else '❌ NO'}")
+                print("="*60 + "\n")
+
+        # Guardar listas en session_state
+        st.session_state["treated_results_list"] = treated_results_list
+        st.session_state["control_results_list"] = control_results_list
 
         #  AHORA SÍ: EXTRAER VALORES DESPUÉS DEL LOOP
         print("\n" + "="*60)
