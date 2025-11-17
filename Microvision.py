@@ -3935,6 +3935,28 @@ elif st.session_state["pagina"] == "reporte":
         st.pyplot(fig)
         plt.close(fig)
 
+        # ====================== TEST T DEBAJO DE LA GRÁFICA ======================
+        st.markdown("### 🧪 Test T para Control vs Tratada")
+
+        test_t = st.session_state.get("test_t_results", None)
+
+        if test_t and test_t.get("suficientes_datos", False):
+
+            colA, colB, colC = st.columns(3)
+
+            colA.metric("t-statistic", f"{test_t['t_stat']:.4f}")
+            colB.metric("p-value", f"{test_t['p_value']:.4f}")
+            colC.metric("Grados de libertad", f"{test_t['df']}")
+
+            # Interpretación
+            if test_t["p_value"] < 0.05:
+                st.success("🔬 Diferencia estadísticamente significativa (p < 0.05).")
+            else:
+                st.warning("⚠️ No hay diferencia significativa (p ≥ 0.05).")
+
+        else:
+            st.info("No hay suficientes datos para realizar el Test T.")
+
    
     # SECCIÓN 3: CONCLUSIÓN 
     st.markdown("---")
