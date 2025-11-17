@@ -3014,7 +3014,7 @@ elif st.session_state["pagina"] == "parametros":
                 # CONTAR COLONIAS EN TRATADA
                 treated_count, treated_original, treated_detected = analyzer.count_colonies_opencv(
                     orig_img, 
-                    debug=False
+                    debug=True
                 )
                 
                 processed_img = treated_detected
@@ -3026,6 +3026,7 @@ elif st.session_state["pagina"] == "parametros":
                     'control_count': promedio_control if promedio_control else 'Pendiente',
                     'log_reduction': 'Se calculará después'
                 })
+                print(f"✅ Tratada {idx+1}: {treated_count} colonias detectadas")
             elif 'E1428' in norma:
                 coverage_percentage, colored_img, has_growth = analyzer.analyze_streptomyces_growth(orig_img, ms)
 
@@ -3048,39 +3049,23 @@ elif st.session_state["pagina"] == "parametros":
                 'results': results
             })
 
-            # Mostrar imágenes y métricas (tu código actual)
+            # Mostrar solo las imágenes, SIN métricas individuales
             st.markdown(f"### Réplica tratada {idx+1}")
             cols = st.columns(2)
 
-           # Verificar y mostrar la imagen
             if orig_img is not None and isinstance(orig_img, np.ndarray):
-                
-                # *** CORRECCIÓN CLAVE: BGR a RGB y ELIMINACIÓN de 'use_container_width' ***
                 try:
-                    # 1. Convertir de BGR (OpenCV) a RGB (Streamlit/PIL)
-                    # Esto es necesario ya que el debugg mostró que es un NumPy array (OpenCV).
                     if len(orig_img.shape) == 3 and orig_img.shape[2] == 3:
                         orig_img_rgb = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
                     else:
-                        orig_img_rgb = orig_img # Ya es escala de grises o 4 canales
-                        
-                    # 2. Mostrar la imagen. ELIMINAMOS 'use_container_width' para evitar el TypeError
-                    cols[0].image(orig_img_rgb, caption="Original") 
-                
+                        orig_img_rgb = orig_img
+                    cols[0].image(orig_img_rgb, caption="Original")
                 except Exception as e:
-                    # Fallback en caso de que la conversión falle por alguna razón inesperada
-                    st.error(f"❌ Error al intentar mostrar la imagen. Detalles: {str(e)}")
-                    # Mostrar el original sin ningún argumento problemático
-                    cols[0].image(orig_img, caption="Original (Fallo en Conversión/Muestra)")
-
-            else:
-                # Manejo del caso donde orig_img es None
-                cols[0].error(f"❌ Error: No se pudo cargar o procesar la imagen original de la réplica {idx+1}.")
-
-            # Si también está usando use_container_width=True para la segunda columna (processed_img), 
-            # debe eliminarlo allí también para mantener la consistencia.
+                    st.error(f"Error al mostrar imagen: {e}")
+            
             if processed_img is not None:
-                cols[1].image(processed_img, caption="Resultado final") # AQUI TAMBIÉN DEBE ELIMINAR 'use_container_width'        
+                cols[1].image(processed_img, caption="Resultado procesado")  
+     
             # Mostrar métricas según norma
             if 'AATCC' in norma or 'TM147' in norma:
                 halo = results.get('inhibition_halo_mm', 0)
@@ -3181,6 +3166,102 @@ elif st.session_state["pagina"] == "parametros":
         # Guardar listas en session_state
         st.session_state["treated_results_list"] = treated_results_list
         st.session_state["control_results_list"] = control_results_list
+
+        # ============================================================================
+        # 📊 MOSTRAR RESULTADOS FINALES JIS Z 2801
+        # ============================================================================
+        if 'JIS' in norma or 'Z2801' in norma:
+            if control_results_list and treated_results_list:
+                st.markdown("---")
+                st.markdown("## 📊 Resultados Finales JIS Z 2801")
+                
+                # Extraer valores
+                valores_control = [c['count'] for c in control_results_list]
+                valores_tratadas = [r['results']['treated_count'] for r in treated_results_list]
+                
+                n_control = len(valores_control)
+                n_tratadas = len(valores_tratadas)
+                
+                promedio_control_final = float(np.mean(valores_control))
+                promedio_tratada_final = float(np.mean(valores_tratadas))
+                
+                # Recuperar reducción log calculada
+                log_red_final = st.session_state.get("log_reduction_final", 0)
+                interpretacion_log = st.session_state.get("log_interpretation", "")
+                cumple_jis = st.session_state.get("cumple_jis", False)
+                
+                # Calcular porcentaje de reducción
+                porcentaje_reduccion = ((promedio_control_final - promedio_tratada_final) / promedio_control_final * 100) if promedio_control_final > 0 else 0
+                
+                # 🎯 Métricas principales
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric(
+                        "Control Promedio", 
+                        f"{promedio_control_final:.1f} UFC",
+                        delta=f"n={n_control}"
+                    )
+                
+                with col2:
+                    delta_val = -(promedio_control_final - promedio_tratada_final)
+                    st.metric(
+                        "Tratada Promedio", 
+                        f"{promedio_tratada_final:.1f} UFC",
+                        delta=f"{delta_val:.1f}",
+                        delta_color="inverse"
+                    )
+                
+                with col3:
+                    # Emoji según reducción log
+                    if log_red_final >= 3.0:
+                        emoji = "🟢"
+                    elif log_red_final >= 2.0:
+                        emoji = "🟡"
+                    elif log_red_final >= 1.0:
+                        emoji = "🟠"
+                    else:
+                        emoji = "🔴"
+                    
+                    st.metric(
+                        "Reducción Logarítmica",
+                        f"{log_red_final:.3f} log₁₀"
+                    )
+                    st.markdown(f"<h1 style='text-align: center; font-size: 48px;'>{emoji}</h1>", 
+                            unsafe_allow_html=True)
+                
+                with col4:
+                    st.metric(
+                        "% Reducción",
+                        f"{porcentaje_reduccion:.1f}%"
+                    )
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # 📋 Interpretación final con estilo
+                if cumple_jis:
+                    st.markdown(f"""
+                        <div style='background-color: #d4edda; padding: 20px; border-radius: 10px; 
+                                    border-left: 5px solid #28a745;'>
+                            <h3 style='color: #155724; margin: 0;'>✅ CUMPLE con JIS Z 2801</h3>
+                            <p style='color: #155724; font-size: 16px; margin: 10px 0 0 0;'>
+                                {interpretacion_log}
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.markdown(f"""
+                        <div style='background-color: #f8d7da; padding: 20px; border-radius: 10px; 
+                                    border-left: 5px solid #dc3545;'>
+                            <h3 style='color: #721c24; margin: 0;'>❌ NO CUMPLE con JIS Z 2801</h3>
+                            <p style='color: #721c24; font-size: 16px; margin: 10px 0 0 0;'>
+                                {interpretacion_log}
+                            </p>
+                            <p style='color: #721c24; font-size: 14px; margin: 10px 0 0 0;'>
+                                <em>Nota: Se requiere R ≥ 2.0 para cumplir con la norma</em>
+                            </p>
+                        </div>
+                    """, unsafe_allow_html=True)
 
         #  AHORA SÍ: EXTRAER VALORES DESPUÉS DEL LOOP
         print("\n" + "="*60)
