@@ -3592,7 +3592,7 @@ elif st.session_state["pagina"] == "reporte":
                     replica = control_results_list[idx]
                     with col:
                         st.image(
-                            replica['processed'],  # ← CAMBIO AQUÍ: usar 'processed' en lugar de 'original'
+                            replica['original'], 
                             use_container_width=True,
                             #caption=f"Control {idx+1} | Colonias: {replica.get('count', 'N/A')}"
                         )
@@ -3609,7 +3609,7 @@ elif st.session_state["pagina"] == "reporte":
                     count = replica.get('results', {}).get('treated_count', 'N/A')
                     with col:
                         st.image(
-                            replica['processed'],  # ← CAMBIO AQUÍ: usar 'processed' en lugar de 'original'
+                            replica['original'],
                             use_container_width=True,
                             #caption=f"Tratada {idx+1} | Colonias: {count}"
                         )
@@ -3634,208 +3634,208 @@ elif st.session_state["pagina"] == "reporte":
         else:
             st.warning("No hay imágenes disponibles.")
 
-         # SECCIÓN 2: RESULTADOS 
-        st.markdown("##  2. RESULTADOS DEL ANÁLISIS")
+        # SECCIÓN 2: RESULTADOS 
+    st.markdown("##  2. RESULTADOS DEL ANÁLISIS")
 
-        if es_jis:
-                # RESULTADOS DETALLADOS PARA JIS (CONTROL + TRATADA)
+    if es_jis:
+            # RESULTADOS DETALLADOS PARA JIS (CONTROL + TRATADA)
+        
             
-                
-                control_results_list = st.session_state.get("control_results_list", [])
-                treated_results_list = st.session_state.get("treated_results_list", [])
-                
-                #  RESULTADOS CONTROL 
-                if control_results_list:
-                    st.markdown("###  Resultados de Réplicas CONTROL")
-                    
-                    # Tabla resumen de controles
-                    data_control = {
-                        'Réplica': [f"Control {i+1}" for i in range(len(control_results_list))],
-                        'Colonias Detectadas (UFC)': [c['count'] for c in control_results_list]
-                    }
-                    df_control = pd.DataFrame(data_control)
-                    st.table(df_control)
-                    
-                    # Estadísticas del control
-                    valores_control = [c['count'] for c in control_results_list]
-                    media_control = np.mean(valores_control)
-                    std_control = np.std(valores_control, ddof=1) if len(valores_control) > 1 else 0
-                    
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Media Control", f"{media_control:.2f} UFC")
-                    col2.metric("Desv. Estándar", f"{std_control:.2f}" if len(valores_control) > 1 else "N/A")
-                    col3.metric("Total Réplicas", len(valores_control))
-                    
-                    st.markdown("---")
-                
-                # RESULTADOS TRATADAS 
-                if treated_results_list:
-                    st.markdown("###  Resultados de Réplicas TRATADAS")
-                    
-                    # Tabla resumen de tratadas
-                    data_tratadas = []
-                    for idx, replica in enumerate(treated_results_list):
-                        results = replica['results']
-                        data_tratadas.append({
-                            'Réplica': f"Tratada {idx+1}",
-                            'Colonias Detectadas (UFC)': results.get('treated_count', 0),
-                            'Reducción Log': f"{results.get('log_reduction', 'N/A'):.2f}" if isinstance(results.get('log_reduction'), (int, float)) else 'N/A'
-                        })
-                    
-                    df_tratadas = pd.DataFrame(data_tratadas)
-                    st.table(df_tratadas)
-                    
-                    # Estadísticas de las tratadas
-                    valores_tratadas = [r['results'].get('treated_count', 0) for r in treated_results_list]
-                    media_tratadas = np.mean(valores_tratadas)
-                    std_tratadas = np.std(valores_tratadas, ddof=1) if len(valores_tratadas) > 1 else 0
-                    
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Media Tratada", f"{media_tratadas:.2f} UFC")
-                    col2.metric("Desv. Estándar", f"{std_tratadas:.2f}" if len(valores_tratadas) > 1 else "N/A")
-                    col3.metric("Total Réplicas", len(valores_tratadas))
-                    
-                    st.markdown("---")
-                
-                # ========== COMPARACIÓN CONTROL VS TRATADA ==========
-                if control_results_list and treated_results_list:
-                    st.markdown("###  Comparación General: Control vs Tratada")
-                    
-                    # Calcular reducción logarítmica promedio
-                    log_reductions = []
-                    for replica in treated_results_list:
-                        log_red = replica['results'].get('log_reduction')
-                        if isinstance(log_red, (int, float)):
-                            log_reductions.append(log_red)
-                    
-                    if log_reductions:
-                        log_red_promedio = np.mean(log_reductions)
-                        log_red_std = np.std(log_reductions, ddof=1) if len(log_reductions) > 1 else 0
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        
-                        with col1:
-                            st.metric("Control Promedio", f"{media_control:.2f} UFC")
-                        
-                        with col2:
-                            delta_val = -(media_control - media_tratadas)
-                            st.metric("Tratada Promedio", f"{media_tratadas:.2f} UFC", delta=f"{delta_val:.2f}")
-                        
-                        with col3:
-                            if log_red_promedio >= 3.0:
-                                color = "🟢"
-                            elif log_red_promedio >= 2.0:
-                                color = "🟡"
-                            elif log_red_promedio >= 1.0:
-                                color = "🟠"
-                            else:
-                                color = "🔴"
-                            st.markdown(f"**Reducción Log Promedio:** {color}")
-                            st.markdown(f"### {log_red_promedio:.2f} ± {log_red_std:.2f}")
-                        
-                        with col4:
-                            porcentaje_reduccion = ((media_control - media_tratadas) / media_control * 100) if media_control > 0 else 0
-                            st.metric("% Reducción", f"{porcentaje_reduccion:.1f}%")
-                        
-                        # Interpretación
-                        if log_red_promedio >= 2.0:
-                            st.success(f" **CUMPLE** con el criterio JIS Z 2801 (R ≥ 2). Actividad antimicrobiana efectiva.")
-                        else:
-                            st.error(f" **NO CUMPLE** con el criterio JIS Z 2801 (R ≥ 2). Actividad antimicrobiana insuficiente.")
-
-        else:
-               
-                # RESULTADOS PARA OTRAS NORMAS
-            
-                
+            control_results_list = st.session_state.get("control_results_list", [])
             treated_results_list = st.session_state.get("treated_results_list", [])
             
+            #  RESULTADOS CONTROL 
+            if control_results_list:
+                st.markdown("###  Resultados de Réplicas CONTROL")
+                
+                # Tabla resumen de controles
+                data_control = {
+                    'Réplica': [f"Control {i+1}" for i in range(len(control_results_list))],
+                    'Colonias Detectadas (UFC)': [c['count'] for c in control_results_list]
+                }
+                df_control = pd.DataFrame(data_control)
+                st.table(df_control)
+                
+                # Estadísticas del control
+                valores_control = [c['count'] for c in control_results_list]
+                media_control = np.mean(valores_control)
+                std_control = np.std(valores_control, ddof=1) if len(valores_control) > 1 else 0
+                
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Media Control", f"{media_control:.2f} UFC")
+                col2.metric("Desv. Estándar", f"{std_control:.2f}" if len(valores_control) > 1 else "N/A")
+                col3.metric("Total Réplicas", len(valores_control))
+                
+                st.markdown("---")
+            
+            # RESULTADOS TRATADAS 
             if treated_results_list:
-                for i, replica in enumerate(treated_results_list):
-                    results = replica["results"]
-                    norma_res = results.get("standard", "")
-                    st.markdown(f"###  Réplica tratada {i+1}")
-                    st.markdown("<hr style='border:1px solid #bbb;'>", unsafe_allow_html=True)
-
-                    if "AATCC" in norma_res or "TM147" in norma_res:
-                        col1, col2, col3 = st.columns(3)
-                        halo = results.get("inhibition_halo_mm", 0)
-                        presencia = results.get("has_inhibition", False)
-                        interpretacion = results.get("interpretation", "No efectivo")
-
-                        with col1:
-                            st.metric("Halo de inhibición", f"{halo:.2f} mm")
-
-                        with col2:
-                            st.metric("Inhibición detectada", "Sí" if presencia else "No")
-
-                        with col3:
-                            color = "🟢" if presencia else "🔴"
-                            st.markdown(f"**Resultado:** {color}")
-                            st.markdown(f"**{interpretacion}**")
-
-                    elif "ASTM_G21" in norma_res or "G21" in norma_res:
-                        col1, col2, col3 = st.columns(3)
-                        cobertura = results.get("coverage_percentage", 0)
-                        rating = results.get("astm_g21_rating", 0)
-
-                        # Interpretación corta según el rating ASTM G21
-                        if rating == 0:
+                st.markdown("###  Resultados de Réplicas TRATADAS")
+                
+                # Tabla resumen de tratadas
+                data_tratadas = []
+                for idx, replica in enumerate(treated_results_list):
+                    results = replica['results']
+                    data_tratadas.append({
+                        'Réplica': f"Tratada {idx+1}",
+                        'Colonias Detectadas (UFC)': results.get('treated_count', 0),
+                        'Reducción Log': f"{results.get('log_reduction', 'N/A'):.2f}" if isinstance(results.get('log_reduction'), (int, float)) else 'N/A'
+                    })
+                
+                df_tratadas = pd.DataFrame(data_tratadas)
+                st.table(df_tratadas)
+                
+                # Estadísticas de las tratadas
+                valores_tratadas = [r['results'].get('treated_count', 0) for r in treated_results_list]
+                media_tratadas = np.mean(valores_tratadas)
+                std_tratadas = np.std(valores_tratadas, ddof=1) if len(valores_tratadas) > 1 else 0
+                
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Media Tratada", f"{media_tratadas:.2f} UFC")
+                col2.metric("Desv. Estándar", f"{std_tratadas:.2f}" if len(valores_tratadas) > 1 else "N/A")
+                col3.metric("Total Réplicas", len(valores_tratadas))
+                
+                st.markdown("---")
+            
+            # ========== COMPARACIÓN CONTROL VS TRATADA ==========
+            if control_results_list and treated_results_list:
+                st.markdown("###  Comparación General: Control vs Tratada")
+                
+                # Calcular reducción logarítmica promedio
+                log_reductions = []
+                for replica in treated_results_list:
+                    log_red = replica['results'].get('log_reduction')
+                    if isinstance(log_red, (int, float)):
+                        log_reductions.append(log_red)
+                
+                if log_reductions:
+                    log_red_promedio = np.mean(log_reductions)
+                    log_red_std = np.std(log_reductions, ddof=1) if len(log_reductions) > 1 else 0
+                    
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Control Promedio", f"{media_control:.2f} UFC")
+                    
+                    with col2:
+                        delta_val = -(media_control - media_tratadas)
+                        st.metric("Tratada Promedio", f"{media_tratadas:.2f} UFC", delta=f"{delta_val:.2f}")
+                    
+                    with col3:
+                        if log_red_promedio >= 3.0:
                             color = "🟢"
-                            interpretacion = "Sin crecimiento fúngico"
-                        elif rating <= 2:
+                        elif log_red_promedio >= 2.0:
                             color = "🟡"
-                            interpretacion = "Crecimiento moderado"
+                        elif log_red_promedio >= 1.0:
+                            color = "🟠"
                         else:
                             color = "🔴"
-                            interpretacion = "Crecimiento alto"
+                        st.markdown(f"**Reducción Log Promedio:** {color}")
+                        st.markdown(f"### {log_red_promedio:.2f} ± {log_red_std:.2f}")
+                    
+                    with col4:
+                        porcentaje_reduccion = ((media_control - media_tratadas) / media_control * 100) if media_control > 0 else 0
+                        st.metric("% Reducción", f"{porcentaje_reduccion:.1f}%")
+                    
+                    # Interpretación
+                    if log_red_promedio >= 2.0:
+                        st.success(f" **CUMPLE** con el criterio JIS Z 2801 (R ≥ 2). Actividad antimicrobiana efectiva.")
+                    else:
+                        st.error(f" **NO CUMPLE** con el criterio JIS Z 2801 (R ≥ 2). Actividad antimicrobiana insuficiente.")
 
-                        with col1:
-                            st.metric("Cobertura fúngica", f"{cobertura:.2f}%")
+    else:
+            
+            # RESULTADOS PARA OTRAS NORMAS
+        
+            
+        treated_results_list = st.session_state.get("treated_results_list", [])
+        
+        if treated_results_list:
+            for i, replica in enumerate(treated_results_list):
+                results = replica["results"]
+                norma_res = results.get("standard", "")
+                st.markdown(f"###  Réplica tratada {i+1}")
+                st.markdown("<hr style='border:1px solid #bbb;'>", unsafe_allow_html=True)
 
-                        with col2:
-                            st.metric("Rating ASTM G21", f"{rating}")
+                if "AATCC" in norma_res or "TM147" in norma_res:
+                    col1, col2, col3 = st.columns(3)
+                    halo = results.get("inhibition_halo_mm", 0)
+                    presencia = results.get("has_inhibition", False)
+                    interpretacion = results.get("interpretation", "No efectivo")
 
-                        with col3:
-                            st.markdown(f"**Clasificación:** {color}")
-                            st.markdown(f"**{interpretacion}**")
-                    elif "ASTM_E1428" in norma_res or "E1428" in norma_res:
-                        col1, col2, col3 = st.columns(3)
-                        count = results.get("colony_count", 0)
-                        growth = results.get("has_visible_growth", False)
-                        resistencia = results.get("material_resistance", "")
+                    with col1:
+                        st.metric("Halo de inhibición", f"{halo:.2f} mm")
 
-                        with col1:
-                            st.metric("Colonias detectadas", count)
+                    with col2:
+                        st.metric("Inhibición detectada", "Sí" if presencia else "No")
 
-                        with col2:
-                            st.metric("Crecimiento visible", "Sí" if growth else "No")
+                    with col3:
+                        color = "🟢" if presencia else "🔴"
+                        st.markdown(f"**Resultado:** {color}")
+                        st.markdown(f"**{interpretacion}**")
 
-                        with col3:
-                            color = "🔴" if growth else "🟢"
-                            st.markdown(f"**Estado:** {color}")
-                            st.markdown(f"**{resistencia}**")
+                elif "ASTM_G21" in norma_res or "G21" in norma_res:
+                    col1, col2, col3 = st.columns(3)
+                    cobertura = results.get("coverage_percentage", 0)
+                    rating = results.get("astm_g21_rating", 0)
 
-                    st.markdown("<hr style='border:0.5px solid #ccc;'>", unsafe_allow_html=True)
-            else:
-                st.warning("No hay resultados disponibles para mostrar.")
-                
-            # GRÁFICA 
-            st.markdown("---")
-            st.markdown("###  Representación gráfica")
+                    # Interpretación corta según el rating ASTM G21
+                    if rating == 0:
+                        color = "🟢"
+                        interpretacion = "Sin crecimiento fúngico"
+                    elif rating <= 2:
+                        color = "🟡"
+                        interpretacion = "Crecimiento moderado"
+                    else:
+                        color = "🔴"
+                        interpretacion = "Crecimiento alto"
 
-            # Recuperar imágenes subidas desde session_state
-            imagenes_subidas = st.session_state.get("imagenes_subidas", {})
-            tratadas = imagenes_subidas.get("tratada", [])
-            controles = imagenes_subidas.get("control", [])
+                    with col1:
+                        st.metric("Cobertura fúngica", f"{cobertura:.2f}%")
 
-            # Mostrar gráfica SOLO si hay exactamente una imagen tratada (y control si aplica)
-            if norma == "JIS Z 2801 2010":
-                if len(controles) == 1 and len(tratadas) == 1:
-                    plot_results_by_norm(norma, results)
-            elif len(tratadas) == 1:
+                    with col2:
+                        st.metric("Rating ASTM G21", f"{rating}")
+
+                    with col3:
+                        st.markdown(f"**Clasificación:** {color}")
+                        st.markdown(f"**{interpretacion}**")
+                elif "ASTM_E1428" in norma_res or "E1428" in norma_res:
+                    col1, col2, col3 = st.columns(3)
+                    count = results.get("colony_count", 0)
+                    growth = results.get("has_visible_growth", False)
+                    resistencia = results.get("material_resistance", "")
+
+                    with col1:
+                        st.metric("Colonias detectadas", count)
+
+                    with col2:
+                        st.metric("Crecimiento visible", "Sí" if growth else "No")
+
+                    with col3:
+                        color = "🔴" if growth else "🟢"
+                        st.markdown(f"**Estado:** {color}")
+                        st.markdown(f"**{resistencia}**")
+
+                st.markdown("<hr style='border:0.5px solid #ccc;'>", unsafe_allow_html=True)
+        else:
+            st.warning("No hay resultados disponibles para mostrar.")
+            
+        # GRÁFICA 
+        st.markdown("---")
+        st.markdown("###  Representación gráfica")
+
+        # Recuperar imágenes subidas desde session_state
+        imagenes_subidas = st.session_state.get("imagenes_subidas", {})
+        tratadas = imagenes_subidas.get("tratada", [])
+        controles = imagenes_subidas.get("control", [])
+
+        # Mostrar gráfica SOLO si hay exactamente una imagen tratada (y control si aplica)
+        if norma == "JIS Z 2801 2010":
+            if len(controles) == 1 and len(tratadas) == 1:
                 plot_results_by_norm(norma, results)
-            # No mostrar mensaje si hay varias réplicas
+        elif len(tratadas) == 1:
+            plot_results_by_norm(norma, results)
+        # No mostrar mensaje si hay varias réplicas
 
                         
     # Mostrar estadísticas globales solo si NO es JIS 
