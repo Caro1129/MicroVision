@@ -3910,17 +3910,18 @@ elif st.session_state["pagina"] == "reporte":
         # ---- CASO 2: Varias réplicas → barras con error ----
         else:
             media_control = np.mean(valores_control)
-            sd_control = np.std(valores_control, ddof=1) if len(valores_control) > 1 else 0
+            sd_control = np.std(valores_control, ddof=1)
+            sem_control = sd_control / np.sqrt(n_control)
 
             media_tratadas = np.mean(valores_tratadas)
-            sd_tratadas = np.std(valores_tratadas, ddof=1) if len(valores_tratadas) > 1 else 0
+            sd_tratadas = np.std(valores_tratadas, ddof=1)
+            sem_tratadas = sd_tratadas / np.sqrt(n_tratadas)
 
             ax.bar(["Control", "Tratada"],
                 [media_control, media_tratadas],
-                yerr=[sd_control, sd_tratadas],
+                yerr=[sem_control, sem_tratadas],
                 capsize=10,
                 edgecolor="black")
-
             # Etiquetas arriba
             ax.text(0, media_control, f"{media_control:.1f}", ha="center", va="bottom", fontweight="bold")
             ax.text(1, media_tratadas, f"{media_tratadas:.1f}", ha="center", va="bottom", fontweight="bold")
