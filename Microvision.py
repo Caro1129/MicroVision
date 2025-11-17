@@ -2406,7 +2406,14 @@ def plot_results_by_norm(norma, results):
     if "jis" in norma_lower or "z2801" in norma_lower:
         control = results.get('control_count') or results.get('control') or results.get('control_count', None)
         tratada = results.get('treated_count') or results.get('tratada') or results.get('treated_count', None)
-        log_red = results.get('log_reduction') or results.get('reduccion_log') or results.get('reduccion_log', None)
+        log_red = results.get('log_reduction', 0)
+
+        # asegurar que sea número
+        if not isinstance(log_red, (int, float)):
+            try:
+                log_red = float(log_red)
+            except:
+                log_red = 0
 
         if control is not None and tratada is not None:
             fig, ax = plt.subplots(figsize=(8,4))
