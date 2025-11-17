@@ -3385,7 +3385,11 @@ elif st.session_state["pagina"] == "parametros":
         # 🔬 CASO 1: NORMA JIS (Control + Tratadas + Reducción Log)
         if 'JIS' in norma or 'Z2801' in norma:
             control_results_list = st.session_state.get("control_results_list", [])
-                
+            log_raw = results.get("log_reduction", 0)
+            try:
+                log_value = float(log_raw)
+            except:
+                log_value = 0 
             # Tabla resumen
             st.markdown("### 📋 Resumen Detallado")
             
@@ -3401,7 +3405,7 @@ elif st.session_state["pagina"] == "parametros":
                 'Valor': [
                     f"{media_control:.2f} ± {desviacion_control:.2f}" if len(control_results_list) > 1 else f"{media_control:.2f}",
                     f"{media:.2f} ± {desviacion:.2f}" if len(treated_results_list) > 1 else f"{media:.2f}",
-                    f"{log_red:.3f}",
+                    f"{log_value:.2f}",
                     f"{porcentaje:.1f}%",
                     str(len(control_results_list)),
                     str(len(treated_results_list))
