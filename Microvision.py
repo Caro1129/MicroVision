@@ -489,20 +489,20 @@ class MultiStandardAnalyzer:
     
 
 
-
-
-
     def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
 
         import cv2
         import numpy as np
-        import math # Asegurarse de que esté importado si se usa en otro lugar, aunque np.sqrt es suficiente.
 
         img = orig_img.copy()
 
+        # ===========================
+        # SEGURIDAD DE ENTRADA
+        # ===========================
         if img is None:
             raise ValueError("Imagen nula")
 
+        # Convertir a BGR si es necesario
         if len(img.shape) == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         elif img.shape[2] == 4:
@@ -512,7 +512,7 @@ class MultiStandardAnalyzer:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         # ===========================
-        # DETECCIÓN PETRI
+        # DETECCIÓN PLACA PETRI
         # ===========================
         blur = cv2.medianBlur(gray, 5)
         edges = cv2.Canny(blur, 60, 150)
@@ -533,14 +533,13 @@ class MultiStandardAnalyzer:
 
         cv2.circle(mask_petri, (cx_petri, cy_petri), max(1, r_petri - 5), 255, -1)
 
-        # calibración
+        # Calibración a 90 mm diámetro interno
         if r_petri > 0:
             mm_per_pixel = 90.0 / (2 * r_petri)
 
         # ===========================
-        # DETECCIÓN TEXTIL CENTRAL (SOLO BORDE BLANCO)
+        # DETECCIÓN TEXTIL CENTRAL (MUY BLANCO)
         # ===========================
-        # Umbral MUY alto para capturar SOLO lo más blanco (el textil limpio)
         _, mask_textil_white = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
 
         mask_center = np.zeros_like(gray)
@@ -552,170 +551,117 @@ class MultiStandardAnalyzer:
 
         cnts_t, _ = cv2.findContours(mask_textil_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        if len(cnts_t) > 0:
-            cnt_textil = max(cnts_t, key=cv2.contourArea)
-            
-            # Obtener bounding box del textil blanco detectado
-            x_t, y_t, w_t, h_t = cv2.boundingRect(cnt_textil)
-            
-            # Crear máscara del textil expandida ligeramente
-            mask_textil_filled = np.zeros_like(gray)
-            cv2.rectangle(mask_textil_filled, (x_t, y_t), (x_t + w_t, y_t + h_t), 255, -1)
-
-            # Centro y radio del textil
-            cx_textil = x_t + w_t // 2
-            cy_textil = y_t + h_t // 2
-            r_textil = int(np.sqrt((w_t * h_t) / np.pi))
-
-        else:
+        if len(cnts_t) == 0:
             raise ValueError("No se detectó textil")
 
+        cnt_textil = max(cnts_t, key=cv2.contourArea)
+        x_t, y_t, w_t, h_t = cv2.boundingRect(cnt_textil)
+
+        # Máscara rectangular del textil
+        mask_textil_filled = np.zeros_like(gray)
+        cv2.rectangle(mask_textil_filled, (x_t, y_t), (x_t + w_t, y_t + h_t), 255, -1)
 
         # ===========================
-        # DETECCIÓN DE CRECIMIENTO (AJUSTE CORREGIDO)
-        # 
-        # Corrección 1: Ajuste de umbrales HSV/Grayscale para detectar crecimiento blanco/crema.
+        # EXTRAER SOLO LOS BORDES LATERALES DEL TEXTIL
         # ===========================
-        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        mask_growth = np.zeros_like(gray)
+        mask_textil_edges = np.zeros_like(gray)
+        mask_textil_edges[:, x_t] = 255
+        mask_textil_edges[:, x_t + w_t - 1] = 255
 
-        # Detección de zonas de interés: Alto Valor/Luminosidad, permitiendo baja Saturación.
-        # Esto ayuda a capturar crecimiento blanco/crema sin ser el textil muy brillante.
-        # H: 0-180 (todos), S: 5 (baja saturación), V: 50 (brillo medio).
-        mask_growth = cv2.inRange(hsv, np.array([0, 5, 50]), np.array([180, 255, 255]))
-        
-        # Quitar zonas muy oscuras (fondo)
-        mask_too_dark = cv2.inRange(gray, 0, 30)
-        mask_growth[mask_too_dark > 0] = 0
+        cx_textil = x_t + w_t // 2
+        cy_textil = y_t + h_t // 2
+        r_textil = int(np.sqrt((w_t * h_t) / np.pi))
 
-        # Quitar zonas muy brillantes (textil). Usamos 240+ para ser menos restrictivos con el crecimiento claro.
-        # Corrección 2: Aumentamos el umbral a 240 para no eliminar crecimiento blanco.
-        mask_too_bright = cv2.inRange(gray, 240, 255)
-        mask_growth[mask_too_bright > 0] = 0
+        # ===========================
+        # DETECCIÓN DE CRECIMIENTO POR TEXTURA (LAPLACIAN)
+        # Detecta bordes reales incluso si el crecimiento es blanco
+        # ===========================
+        lap = cv2.Laplacian(gray, cv2.CV_64F)
+        lap = cv2.convertScaleAbs(lap)
+        _, mask_growth = cv2.threshold(lap, 15, 255, cv2.THRESH_BINARY)
 
-        # quitar textil y limitar a petri
+        # Limitar a la placa petri y excluir textil
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
-        mask_growth[mask_textil_filled > 0] = 0 # Eliminamos el área del textil
+        mask_growth[mask_textil_filled > 0] = 0
 
-        # dar continuidad
+        # Suavizar y cerrar huecos
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=2)
-        
-        # Eliminar solo ruido muy pequeño
-        cnts_growth, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Eliminar ruido pequeño
+        cnts_g, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_growth_clean = np.zeros_like(gray)
-        for cnt in cnts_growth:
-            # Área mínima para considerar un contorno como crecimiento
-            if cv2.contourArea(cnt) > 30: 
-                cv2.drawContours(mask_growth_clean, [cnt], -1, 255, -1)
-        
+        for c in cnts_g:
+            if cv2.contourArea(c) > 30:
+                cv2.drawContours(mask_growth_clean, [c], -1, 255, -1)
+
         mask_growth = mask_growth_clean
-        
-        # DEBUG: Si debug=True, mostrar máscaras intermedias
-        if debug:
-            print(f"Área total de crecimiento detectado: {np.sum(mask_growth > 0)} píxeles")
-            # Nota: cv2.imshow y cv2.waitKey solo funcionan en entornos locales.
-            # cv2.imshow("DEBUG: Máscara crecimiento", mask_growth)
-            # cv2.waitKey(0)
 
         # ===========================
-        # *LIMITAR MEDICIÓN SOLO A LOS LATERALES*
-        # 
-        # Corrección 3: COMENTAR/ELIMINAR el filtro de banda vertical. 
-        # La función 'medir_y_visualizar' ya se encarga de medir solo en los lados
-        # donde detecta el textil, cumpliendo el requisito.
+        # FUNCIÓN DE MEDICIÓN
         # ===========================
-        # banda = np.zeros_like(gray)
-        # ancho = int(w * 0.30)  # mide zona central vertical
-        # banda[:, w//2 - ancho//2 : w//2 + ancho//2] = 255
-        # mask_growth = cv2.bitwise_and(mask_growth, banda)
-
-        # ===========================
-        # MEDICIÓN Y VISUALIZACIÓN MEJORADA (Lógica correcta para el promedio lateral)
-        # ===========================
-        def medir_y_visualizar(mask_textil, mask_micro, mm_per_pixel):
-            hh, ww = mask_textil.shape
+        def medir_y_visualizar(mask_textil_edges, mask_micro, mm_per_pixel):
+            hh, ww = mask_textil_edges.shape
             halos_mm = []
-            mask_visual = np.zeros_like(mask_textil)
-            
-            # Validar que hay suficiente crecimiento
-            area_growth = np.sum(mask_micro > 0)
-            if debug:
-                print(f"Área de crecimiento para medición: {area_growth} píxeles")
-            
-            if area_growth < 100: 
-                if debug:
-                    print("⚠️ Área insuficiente para medir")
-                return 0.0, mask_visual
-            
-            # Iterar verticalmente a lo largo del textil (muestreo)
-            for y_scan in range(0, hh, 3):
-                fila_t = mask_textil[y_scan]
+            mask_visual = np.zeros_like(mask_textil_edges)
+
+            for y_scan in range(0, hh, 3):  # muestreo vertical cada 3 px
+                fila_t = mask_textil_edges[y_scan]
                 fila_m = mask_micro[y_scan]
-                
+
                 idx_textil = np.where(fila_t > 0)[0]
-                if idx_textil.size == 0:
+                if idx_textil.size != 2:
                     continue
-                
-                x_left = int(idx_textil[0])
-                x_right = int(idx_textil[-1])
-                
+
+                x_left = idx_textil[0]
+                x_right = idx_textil[1]
+
                 # izquierda
-                # Busca el último píxel de crecimiento ANTES del borde izquierdo del textil
                 idx_m_left = np.where(fila_m[:x_left] > 0)[0]
                 if idx_m_left.size > 0:
                     x_start = idx_m_left[-1]
                     halo_px = x_left - x_start
-                    if halo_px > 2 and halo_px < 200:
+                    if 2 < halo_px < 200:
                         halos_mm.append(halo_px * mm_per_pixel)
-                        # Colorear la zona medida
                         mask_visual[y_scan, x_start:x_left] = 255
-                
+
                 # derecha
-                # Busca el primer píxel de crecimiento DESPUÉS del borde derecho del textil
                 idx_m_right = np.where(fila_m[x_right+1:] > 0)[0]
                 if idx_m_right.size > 0:
                     x_end = idx_m_right[0] + x_right + 1
                     halo_px = x_end - x_right
-                    if halo_px > 2 and halo_px < 200:
+                    if 2 < halo_px < 200:
                         halos_mm.append(halo_px * mm_per_pixel)
-                        # Colorear la zona medida
                         mask_visual[y_scan, x_right:x_end] = 255
-                
-                if debug:
-                    if len(halos_mm) > 0:
-                        print(f"Línea {y_scan}: Medido {halo_px * mm_per_pixel:.2f} mm")
-            
-            if debug:
-                print(f"Mediciones totales recolectadas: {len(halos_mm)}")
-            
+
             if len(halos_mm) == 0:
                 return 0.0, mask_visual
-            
-            # Se retorna el promedio de todas las mediciones laterales
+
             return float(np.mean(halos_mm)), mask_visual
 
-        avg, mask_growth_visual = medir_y_visualizar(mask_textil_filled, mask_growth, mm_per_pixel)
+        # ===========================
+        # MEDICIÓN DEL HALO FINAL
+        # ===========================
+        avg, mask_growth_visual = medir_y_visualizar(mask_textil_edges, mask_growth, mm_per_pixel)
 
         # ===========================
         # VISUAL
         # ===========================
         overlay = img.copy()
-        overlay[mask_textil_filled > 0] = (60, 60, 220) 
-        overlay[mask_growth_visual > 0] = (60, 220, 60) 
+        overlay[mask_textil_filled > 0] = (60, 60, 220)
+        overlay[mask_growth_visual > 0] = (60, 220, 60)
 
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
 
         return (
-            mask_textil_filled,
-            mask_growth_visual, 
-            avg, # ESTE ES EL PROMEDIO QUE BUSCAS
+            mask_textil_edges,
+            mask_growth_visual,
+            avg,     # ★ PROMEDIO REAL DEL HALO
             overlay_final,
             None,
             (cx_textil, cy_textil, r_textil)
         )
 
-   
 
     def count_colonies_opencv(self, original_img, debug=False):
         """
