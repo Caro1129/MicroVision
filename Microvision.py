@@ -612,10 +612,10 @@ class MultiStandardAnalyzer:
         # ===========================
         # *LIMITAR MEDICIÓN SOLO A LOS LATERALES*
         # ===========================
-        banda = np.zeros_like(gray)
-        ancho = int(w * 0.30)  # mide zona central vertical
-        banda[:, w//2 - ancho//2 : w//2 + ancho//2] = 255
-        mask_growth = cv2.bitwise_and(mask_growth, banda)
+        #banda = np.zeros_like(gray)
+        #ancho = int(w * 0.30)  # mide zona central vertical
+        #banda[:, w//2 - ancho//2 : w//2 + ancho//2] = 255
+        #mask_growth = cv2.bitwise_and(mask_growth, banda)
 
         # ===========================
         # MEDICIÓN Y VISUALIZACIÓN MEJORADA
