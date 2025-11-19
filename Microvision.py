@@ -489,6 +489,9 @@ class MultiStandardAnalyzer:
     
 
 
+
+
+
     def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
 
         import cv2
@@ -568,19 +571,19 @@ class MultiStandardAnalyzer:
 
 
         # ===========================
-        # DETECCIÓN DE CRECIMIENTO (RANGOS AJUSTADOS)
+        # DETECCIÓN DE CRECIMIENTO (RANGOS BALANCEADOS)
         # ===========================
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         mask_growth = np.zeros_like(gray)
 
-        # beige / verdoso (más estricto en saturación)
-        mask_growth |= cv2.inRange(hsv, np.array([15, 30, 60]), np.array([40, 200, 255]))
+        # beige / verdoso
+        mask_growth |= cv2.inRange(hsv, np.array([15, 25, 55]), np.array([40, 200, 255]))
 
-        # VERDE (más estricto)
-        mask_growth |= cv2.inRange(hsv, np.array([35, 30, 50]), np.array([90, 255, 255]))
+        # VERDE
+        mask_growth |= cv2.inRange(hsv, np.array([35, 25, 45]), np.array([90, 255, 255]))
 
-        # TURQUESA MUY TENUE (más estricto)
-        mask_growth |= cv2.inRange(hsv, np.array([80, 20, 50]), np.array([110, 180, 255]))
+        # TURQUESA MUY TENUE (crucial para estos halos)
+        mask_growth |= cv2.inRange(hsv, np.array([80, 15, 45]), np.array([110, 180, 255]))
 
         # quitar textil y limitar a petri
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
@@ -590,11 +593,11 @@ class MultiStandardAnalyzer:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=2)
         
-        # Eliminar ruido: solo contornos grandes (mínimo 100 píxeles)
+        # Eliminar solo ruido MUY pequeño (mínimo 50 píxeles)
         cnts_growth, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_growth_clean = np.zeros_like(gray)
         for cnt in cnts_growth:
-            if cv2.contourArea(cnt) > 100:  # Filtrar ruido pequeño
+            if cv2.contourArea(cnt) > 50:  # Menos estricto
                 cv2.drawContours(mask_growth_clean, [cnt], -1, 255, -1)
         
         mask_growth = mask_growth_clean
@@ -615,9 +618,9 @@ class MultiStandardAnalyzer:
             halos_mm = []
             mask_visual = np.zeros_like(mask_textil)
             
-            # Validar que hay suficiente crecimiento para medir
+            # Validar que hay suficiente crecimiento (menos estricto)
             area_growth = np.sum(mask_micro > 0)
-            if area_growth < 500:  # Muy poco crecimiento = sin inhibición
+            if area_growth < 200:  # Bajado de 500 a 200
                 return 0.0, mask_visual
             
             for y_scan in range(0, hh, 3):
@@ -636,7 +639,7 @@ class MultiStandardAnalyzer:
                 if idx_m_left.size > 0:
                     x_start = idx_m_left[-1]
                     halo_px = x_left - x_start
-                    if halo_px > 2 and halo_px < 100:  # Máximo razonable 100px
+                    if halo_px > 2 and halo_px < 150:  # Aumentado límite
                         halos_mm.append(halo_px * mm_per_pixel)
                         mask_visual[y_scan, x_start:x_left] = 255
                 
@@ -645,7 +648,7 @@ class MultiStandardAnalyzer:
                 if idx_m_right.size > 0:
                     x_end = idx_m_right[0] + x_right + 1
                     halo_px = x_end - x_right
-                    if halo_px > 2 and halo_px < 100:  # Máximo razonable 100px
+                    if halo_px > 2 and halo_px < 150:  # Aumentado límite
                         halos_mm.append(halo_px * mm_per_pixel)
                         mask_visual[y_scan, x_right:x_end] = 255
             
@@ -673,8 +676,6 @@ class MultiStandardAnalyzer:
             None,  # line_measurements
             (cx_textil, cy_textil, r_textil)
         )
-
-
 
    
 
