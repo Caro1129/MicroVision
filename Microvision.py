@@ -489,14 +489,10 @@ class MultiStandardAnalyzer:
     
 
 
-
-
-  
-
     def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
         """
-        Análisis de halo TM147 - VERSIÓN FINAL
-        Medición lateral izquierda-derecha basada en filas.
+        Análisis de halo TM147 - VERSIÓN FINAL ADAPTADA
+        Medición lateral izquierda-derecha robusta basada en filas.
         """
         import cv2
         import numpy as np
@@ -543,36 +539,42 @@ class MultiStandardAnalyzer:
             mm_per_pixel = diametro_real_mm / (2 * r_petri)
 
         # ================================================================
-        # DETECCIÓN DE TEXTIL (BLANCO)
+        # DETECCIÓN DEL TEXTIL (DEBE QUEDAR COMPLETO)
         # ================================================================
-        _, mask_textil_white = cv2.threshold(gray, 220, 255, cv2.THRESH_BINARY)
-        mask_textil_white = cv2.bitwise_and(mask_textil_white, mask_petri)
+        blur_t = cv2.GaussianBlur(gray, (11, 11), 0)
+        _, th_t = cv2.threshold(blur_t, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        kernel_textil = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-        mask_textil_white = cv2.morphologyEx(mask_textil_white, cv2.MORPH_CLOSE, kernel_textil, iterations=2)
-        mask_textil_white = cv2.morphologyEx(mask_textil_white, cv2.MORPH_OPEN, kernel_textil, iterations=1)
+        # invertir si es necesario
+        if np.sum(th_t == 255) < th_t.size * 0.5:
+            th_t = cv2.bitwise_not(th_t)
 
-        contours_textil, _ = cv2.findContours(mask_textil_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        th_t = cv2.bitwise_and(th_t, mask_petri)
 
-        if contours_textil:
-            cnt_textil = max(contours_textil, key=cv2.contourArea)
-            (x_t, y_t), r_textil = cv2.minEnclosingCircle(cnt_textil)
-            cx_textil, cy_textil, r_textil = int(x_t), int(y_t), int(r_textil)
-            textil_contour = cnt_textil
+        th_t = cv2.morphologyEx(th_t, cv2.MORPH_CLOSE, np.ones((7,7), np.uint8))
+        th_t = cv2.morphologyEx(th_t, cv2.MORPH_OPEN, np.ones((5,5), np.uint8))
+
+        cnts_t, _ = cv2.findContours(th_t, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        if len(cnts_t) > 0:
+            cnt_textil = max(cnts_t, key=cv2.contourArea)
+        else:
+            cnt_textil = None
+
+        mask_textil_filled = np.zeros_like(gray)
+        if cnt_textil is not None:
+            cv2.drawContours(mask_textil_filled, [cnt_textil], -1, 255, -1)
+            M = cv2.moments(cnt_textil)
+            cx_textil = int(M["m10"]/M["m00"])
+            cy_textil = int(M["m01"]/M["m00"])
+            r_textil = int(np.sqrt(cv2.contourArea(cnt_textil)/np.pi))
         else:
             cx_textil, cy_textil = cx_petri, cy_petri
             r_textil = int(r_petri * 0.12)
-            textil_contour = np.array([
-                [[cx_textil + int(r_textil * np.cos(a)),
-                cy_textil + int(r_textil * np.sin(a))]]
-                for a in np.linspace(0, 2*np.pi, 100)
-            ], dtype=np.int32)
-
-        mask_textil_filled = np.zeros_like(gray)
-        cv2.drawContours(mask_textil_filled, [textil_contour], -1, 255, -1)
+            mask_textil_filled = np.zeros_like(gray)
+            cv2.circle(mask_textil_filled, (cx_textil, cy_textil), r_textil, 255, -1)
 
         # ================================================================
-        # DETECCIÓN DE CRECIMIENTO (BEIGE / VERDE / TONOS)
+        # DETECCIÓN DEL CRECIMIENTO
         # ================================================================
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
@@ -586,60 +588,47 @@ class MultiStandardAnalyzer:
 
         mask_growth = cv2.bitwise_or(mask_yellow, mask_green)
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
-
         mask_growth[mask_textil_filled > 0] = 0
 
-        # eliminar artefactos cyan
-        lower_artifact = np.array([80, 30, 40])
-        upper_artifact = np.array([130, 255, 255])
-        mask_artifacts = cv2.inRange(hsv, lower_artifact, upper_artifact)
-        mask_growth[mask_artifacts > 0] = 0
-
-        # limpieza
+        # limpieza final
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=1)
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_OPEN, kernel, iterations=1)
 
         # ================================================================
-        # FUNCIÓN DE MEDICIÓN LATERAL
+        # MEDICIÓN LATERAL CORREGIDA
         # ================================================================
         def medir_halo_lateral(mask_textil, mask_micro, mm_per_pixel):
             h, w = mask_textil.shape
+            halos_mm = []
 
-            zona_izq = int(w * 0.20)
-            zona_der = int(w * 0.80)
-
-            distancias_px = []
-
-            for y in range(h):
+            for y in range(0, h, 5):  # saltos de 5 px
                 fila_t = mask_textil[y]
                 fila_m = mask_micro[y]
 
-                # -------- IZQUIERDA --------
-                try:
-                    x_t_l = np.where(fila_t[:zona_izq] > 0)[0][0]
-                    x_m_l = np.where(fila_m[:zona_izq] > 0)[0][0]
-                    distancias_px.append(abs(x_m_l - x_t_l))
-                except:
-                    pass
+                # --- izquierda ---
+                t_left = np.where(fila_t > 0)[0]
+                if len(t_left) == 0:
+                    continue
+                x_tl = t_left[0]
 
-                # -------- DERECHA --------
-                try:
-                    x_t_r = np.where(fila_t[zona_der:] > 0)[0][-1] + zona_der
-                    x_m_r = np.where(fila_m[zona_der:] > 0)[0][-1] + zona_der
-                    distancias_px.append(abs(x_t_r - x_m_r))
-                except:
-                    pass
+                m_left = np.where(fila_m[:x_tl] > 0)[0]
+                if len(m_left) > 0:
+                    x_ml = m_left[-1]
+                    halos_mm.append((x_tl - x_ml) * mm_per_pixel)
 
-            if len(distancias_px) == 0:
+                # --- derecha ---
+                t_right = t_left[-1]
+                m_right = np.where(fila_m[t_right:] > 0)[0]
+                if len(m_right) > 0:
+                    x_mr = m_right[0] + t_right
+                    halos_mm.append((x_mr - t_right) * mm_per_pixel)
+
+            if len(halos_mm) == 0:
                 return 0.0, []
 
-            distancias_mm = [d * mm_per_pixel for d in distancias_px]
-            return float(np.mean(distancias_mm)), distancias_mm
+            return float(np.mean(halos_mm)), halos_mm
 
-        # ================================================================
-        # EJECUTAR MEDICIÓN LATERAL
-        # ================================================================
         avg_halo_mm, line_measurements = medir_halo_lateral(
             mask_textil_filled, mask_growth, mm_per_pixel
         )
@@ -648,20 +637,20 @@ class MultiStandardAnalyzer:
         # VISUALIZACIÓN
         # ================================================================
         overlay = img.copy()
-
-        overlay[mask_textil_filled > 0] = (60, 60, 220)
-        overlay[mask_growth > 0] = (60, 220, 60)
+        overlay[mask_textil_filled > 0] = (60, 60, 220)   # textil morado
+        overlay[mask_growth > 0] = (60, 220, 60)          # crecimiento verde
 
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
         overlay_final = cv2.bitwise_and(overlay_final, overlay_final, mask=mask_petri)
-        cv2.drawContours(overlay_final, [textil_contour], -1, (0, 0, 255), 2)
 
         cv2.putText(overlay_final, f"Halo lateral: {avg_halo_mm:.2f} mm",
                     (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                     (0, 255, 0) if avg_halo_mm > 0 else (0, 0, 255), 2)
 
+        cv2.drawContours(overlay_final, [cnt_textil], -1, (0, 0, 255), 2)
+
         # ================================================================
-        # RETORNO EN FORMATO COMPATIBLE
+        # RETORNO
         # ================================================================
         return (
             mask_textil_filled,
@@ -673,11 +662,9 @@ class MultiStandardAnalyzer:
         )
 
 
+  
 
-
-
-
-
+   
 
     def count_colonies_opencv(self, original_img, debug=False):
         """
