@@ -490,19 +490,14 @@ class MultiStandardAnalyzer:
 
 
     def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
-
         import cv2
         import numpy as np
 
         img = orig_img.copy()
-
-        # ===========================
-        # SEGURIDAD DE ENTRADA
-        # ===========================
         if img is None:
             raise ValueError("Imagen nula")
 
-        # Convertir a BGR si es necesario
+        # Normalizar formato BGR
         if len(img.shape) == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         elif img.shape[2] == 4:
@@ -511,280 +506,178 @@ class MultiStandardAnalyzer:
         h, w = img.shape[:2]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        # ===========================
-        # DETECCIÓN PLACA PETRI
-        # ===========================
+        # ---------- PETRI ----------
         blur = cv2.medianBlur(gray, 5)
         edges = cv2.Canny(blur, 60, 150)
-
         circles = cv2.HoughCircles(
             edges, cv2.HOUGH_GRADIENT, dp=1.2, minDist=100,
             param1=80, param2=30,
             minRadius=int(min(h, w) * 0.25),
             maxRadius=int(min(h, w) * 0.48)
         )
-
         mask_petri = np.zeros_like(gray)
         if circles is not None:
             x, y, r = np.uint16(np.around(circles[0][0]))
             cx_petri, cy_petri, r_petri = int(x), int(y), int(r)
         else:
             cx_petri, cy_petri, r_petri = w//2, h//2, int(min(h, w)*0.45)
-
         cv2.circle(mask_petri, (cx_petri, cy_petri), max(1, r_petri - 5), 255, -1)
 
-        # Calibración a 90 mm diámetro interno
+        # calibración a 90 mm diámetro interno
         if r_petri > 0:
             mm_per_pixel = 90.0 / (2 * r_petri)
 
-        # ===========================
-        # DETECCIÓN TEXTIL CENTRAL (MUY BLANCO)
-        # ===========================
-        _, mask_textil_white = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
+        # Sanity check mm_per_pixel
+        if not (0.01 < mm_per_pixel < 5.0):
+            if debug:
+                print(f"[WARN] mm_per_pixel inusual: {mm_per_pixel}")
 
+        # ---------- TEXTIL ----------
+        _, mask_textil_white = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
         mask_center = np.zeros_like(gray)
         cv2.circle(mask_center, (cx_petri, cy_petri), int(r_petri * 0.45), 255, -1)
         mask_textil_white = cv2.bitwise_and(mask_textil_white, mask_center)
-
         kernel_t = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
         mask_textil_white = cv2.morphologyEx(mask_textil_white, cv2.MORPH_CLOSE, kernel_t, iterations=2)
-
         cnts_t, _ = cv2.findContours(mask_textil_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
         if len(cnts_t) == 0:
             raise ValueError("No se detectó textil")
-
         cnt_textil = max(cnts_t, key=cv2.contourArea)
         x_t, y_t, w_t, h_t = cv2.boundingRect(cnt_textil)
 
-        # Máscara rectangular del textil
         mask_textil_filled = np.zeros_like(gray)
         cv2.rectangle(mask_textil_filled, (x_t, y_t), (x_t + w_t, y_t + h_t), 255, -1)
 
-        # ===========================
-        # EXTRAER SOLO LOS BORDES LATERALES DEL TEXTIL
-        # ===========================
+        # bordes laterales con tolerancia (2-3 px)
         mask_textil_edges = np.zeros_like(gray)
-        mask_textil_edges[:, x_t] = 255
-        mask_textil_edges[:, x_t + w_t - 1] = 255
+        left_col = max(0, x_t)
+        right_col = min(w-1, x_t + w_t - 1)
+        mask_textil_edges[:, max(0, left_col-1): min(w, left_col+2)] = 255
+        mask_textil_edges[:, max(0, right_col-1): min(w, right_col+2)] = 255
 
         cx_textil = x_t + w_t // 2
         cy_textil = y_t + h_t // 2
         r_textil = int(np.sqrt((w_t * h_t) / np.pi))
 
-        # ===========================
-        # DETECCIÓN DE CRECIMIENTO POR TEXTURA (LAPLACIAN)
-        # Detecta bordes reales incluso si el crecimiento es blanco
-        # ===========================
+        # ---------- CRECIMIENTO (LAPLACIAN) ----------
         lap = cv2.Laplacian(gray, cv2.CV_64F)
         lap = cv2.convertScaleAbs(lap)
         _, mask_growth = cv2.threshold(lap, 15, 255, cv2.THRESH_BINARY)
 
-        # Limitar a la placa petri y excluir textil
+        # fallback HSV si poco detectado
+        if np.sum(mask_growth > 0) < 200:
+            hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+            mask_hsv = cv2.inRange(hsv, np.array([0,5,50]), np.array([180,255,255]))
+            mask_too_bright = cv2.inRange(gray, 240, 255)
+            mask_hsv[mask_too_bright>0] = 0
+            mask_growth = cv2.bitwise_or(mask_growth, mask_hsv)
+
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
         mask_growth[mask_textil_filled > 0] = 0
-
-        # Suavizar y cerrar huecos
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-        # Eliminar ruido pequeño
+        # limpiar ruido
         cnts_g, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_growth_clean = np.zeros_like(gray)
         for c in cnts_g:
             if cv2.contourArea(c) > 30:
                 cv2.drawContours(mask_growth_clean, [c], -1, 255, -1)
-
         mask_growth = mask_growth_clean
 
-        # ===========================
-        # FUNCIÓN DE MEDICIÓN
-        # ===========================
-        def medir_y_visualizar(mask_textil_edges, mask_micro, mm_per_pixel):
-            hh, ww = mask_textil_edges.shape
-            halos_mm = []
-            mask_visual = np.zeros_like(mask_textil_edges)
+        # ---------- MEDICIÓN POR FILAS (mejorada) ----------
+        halos_mm = []
+        mask_visual = np.zeros_like(gray)
+        hh, ww = mask_textil_edges.shape
+        for y_scan in range(0, hh, 3):
+            fila_t = mask_textil_edges[y_scan]
+            fila_m = mask_growth[y_scan]
+            idx_textil = np.where(fila_t > 0)[0]
+            if idx_textil.size < 2:
+                continue
+            x_left = int(idx_textil.min())
+            x_right = int(idx_textil.max())
 
-            for y_scan in range(0, hh, 3):  # muestreo vertical cada 3 px
-                fila_t = mask_textil_edges[y_scan]
-                fila_m = mask_micro[y_scan]
-
-                idx_textil = np.where(fila_t > 0)[0]
-                if idx_textil.size != 2:
-                    continue
-
-                x_left = idx_textil[0]
-                x_right = idx_textil[1]
-
-                # izquierda
-                idx_m_left = np.where(fila_m[:x_left] > 0)[0]
+            # Buscar el píxel de crecimiento más cercano a la izquierda (último antes del borde)
+            if x_left > 0:
+                # buscamos todos los píxeles de crecimiento en la región izquierda hasta un límite razonable
+                left_region = fila_m[:x_left]
+                idx_m_left = np.where(left_region > 0)[0]
                 if idx_m_left.size > 0:
-                    x_start = idx_m_left[-1]
+                    # escoger el más cercano (el máximo índice)
+                    x_start = int(idx_m_left[-1])
                     halo_px = x_left - x_start
                     if 2 < halo_px < 200:
                         halos_mm.append(halo_px * mm_per_pixel)
                         mask_visual[y_scan, x_start:x_left] = 255
 
-                # derecha
-                idx_m_right = np.where(fila_m[x_right+1:] > 0)[0]
+            # Buscar el píxel de crecimiento más cercano a la derecha (primer después del borde)
+            if x_right < ww-1:
+                right_region = fila_m[x_right+1:]
+                idx_m_right = np.where(right_region > 0)[0]
                 if idx_m_right.size > 0:
-                    x_end = idx_m_right[0] + x_right + 1
+                    x_end = int(idx_m_right[0] + x_right + 1)
                     halo_px = x_end - x_right
                     if 2 < halo_px < 200:
                         halos_mm.append(halo_px * mm_per_pixel)
                         mask_visual[y_scan, x_right:x_end] = 255
 
-            if len(halos_mm) == 0:
-                return 0.0, mask_visual
+        avg_scan = float(np.mean(halos_mm)) if len(halos_mm) > 0 else 0.0
 
-            return float(np.mean(halos_mm)), mask_visual
+        # ---------- MÉTODO ROBUSTO: DISTANCE TRANSFORM ----------
+        # Crear bin_growth donde 1 = growth
+        bin_growth = (mask_growth > 0).astype('uint8')
+        # Queremos distancia desde cada píxel del borde del textil hasta el píxel de growth más cercano.
+        # distanceTransform requiere foreground>0, background=0, y devuelve dist. Usamos (1 - bin_growth) como input:
+        inv = (1 - bin_growth).astype('uint8') * 255
+        dt = cv2.distanceTransform(inv, cv2.DIST_L2, 5)
+        border_coords = np.column_stack(np.where(mask_textil_edges > 0))
+        dist_list_px = []
+        for (y, x) in border_coords:
+            if mask_petri[y, x] == 0:
+                continue
+            val = dt[y, x]
+            if val > 0 and val < 1000:
+                dist_list_px.append(val)
+        avg_dt = float(np.mean(dist_list_px))*mm_per_pixel if len(dist_list_px)>0 else 0.0
 
-        # ===========================
-        # MEDICIÓN DEL HALO FINAL
-        # ===========================
-        avg, mask_growth_visual = medir_y_visualizar(mask_textil_edges, mask_growth, mm_per_pixel)
-
-        # ===========================
-        # VISUAL
-        # ===========================
+        # ---------- VISUAL ----------
         overlay = img.copy()
         overlay[mask_textil_filled > 0] = (60, 60, 220)
-        overlay[mask_growth_visual > 0] = (60, 220, 60)
-
+        overlay[mask_visual > 0] = (0, 255, 0)
+        overlay[mask_growth > 0] = (60, 220, 60)
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
 
-        return (
-            mask_textil_edges,
-            mask_growth_visual,
-            avg,     # ★ PROMEDIO REAL DEL HALO
-            overlay_final,
-            None,
-            (cx_textil, cy_textil, r_textil)
-        )
+        # ---------- ESTADÍSTICAS ----------
+        def stats_from(lst):
+            import numpy as _np
+            if len(lst)==0:
+                return {}
+            a = _np.array(lst)
+            return {"count":int(a.size),"mean":float(a.mean()),"median":float(_np.median(a)),"std":float(a.std())}
 
+        stats_scan = stats_from(halos_mm)
+        stats_dt = stats_from(np.array(dist_list_px)*mm_per_pixel if len(dist_list_px)>0 else [])
 
-    def count_colonies_opencv(self, original_img, debug=False):
-        """
-        Contador optimizado para COLONIAS CLARAS sobre AGAR CLARO,
-        con separación de colonias pegadas usando distance transform + watershed.
-        """
-
-        import cv2
-        import numpy as np
-        import matplotlib.pyplot as plt
-        import streamlit as st
-
-        # --- 1) Escala de grises ---
-        if len(original_img.shape) == 3:
-            gray = cv2.cvtColor(original_img, cv2.COLOR_RGB2GRAY)
-            img_rgb = original_img.copy()
-        else:
-            gray = original_img.copy()
-            img_rgb = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
-        # --- 2) Suavizado + realce ---
-        den = cv2.bilateralFilter(gray, 9, 40, 40)
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        enh = clahe.apply(den)
-
-        # --- 3) Eliminación de fondo ---
-        kernel_bg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (45, 45))
-        bg = cv2.morphologyEx(enh, cv2.MORPH_OPEN, kernel_bg)
-        enh2 = cv2.subtract(enh, bg)
-        enh2 = cv2.normalize(enh2, None, 0, 255, cv2.NORM_MINMAX)
-
-        # --- 4) Binarización robusta ---
-        _, th_global = cv2.threshold(enh2, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        th_adapt = cv2.adaptiveThreshold(enh2, 255,
-                                        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                        cv2.THRESH_BINARY,
-                                        35, -2)
-
-        th = cv2.bitwise_and(th_global, th_adapt)
-
-        kernel = np.ones((3, 3), np.uint8)
-        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, kernel, iterations=2)
-        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
-
-        # ===========================================================
-        # 🚀 ***SEPARACIÓN DE COLONIAS PEGADAS (WATERSHED SUAVE)***
-        # ===========================================================
-        dist = cv2.distanceTransform(th, cv2.DIST_L2, 5)
-
-        # Ajusta 0.35 → más bajo = separa más
-        _, sure_fg = cv2.threshold(dist, 0.35 * dist.max(), 255, 0)
-        sure_fg = np.uint8(sure_fg)
-
-        sure_bg = cv2.dilate(th, np.ones((3, 3), np.uint8), iterations=3)
-        unknown = cv2.subtract(sure_bg, sure_fg)
-
-        # Marcadores
-        _, markers = cv2.connectedComponents(sure_fg)
-        markers = markers + 1
-        markers[unknown == 255] = 0
-
-        # Watershed
-        color_img = cv2.cvtColor(enh2, cv2.COLOR_GRAY2BGR)
-        markers = cv2.watershed(color_img, markers)
-
-        # Máscara final separada
-        th_separado = np.zeros_like(th)
-        th_separado[markers > 1] = 255
-
-        # --- 5) Contornos ---
-        contours, _ = cv2.findContours(th_separado, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        valid_colonies = []
-
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < 40 or area > 9000:
-                continue
-
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter < 10:
-                continue
-
-            circularity = 4 * np.pi * area / (perimeter ** 2)
-            if circularity < 0.25:
-                continue
-
-            # Mapa a coordenadas
-            M = cv2.moments(cnt)
-            if M["m00"] > 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                valid_colonies.append((cx, cy, cnt))
-
-        colonies_count = len(valid_colonies)
-
-        # --- 6) Dibujar resultado ---
-        detected_img = img_rgb.copy()
-        for i, (cx, cy, cnt) in enumerate(valid_colonies):
-            cv2.drawContours(detected_img, [cnt], -1, (0, 255, 0), 2)
-            cv2.circle(detected_img, (cx, cy), 5, (0, 255, 0), -1)
-            cv2.putText(detected_img, str(i + 1), (cx + 5, cy - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
-
-        cv2.rectangle(detected_img, (5, 5), (320, 45), (0, 0, 0), -1)
-        cv2.putText(detected_img, f"COLONIAS: {colonies_count}", (15, 35),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
-        # --- 7) Debug ---
         if debug:
-            fig, ax = plt.subplots(2, 3, figsize=(16, 9))
-            ax[0, 0].imshow(gray, cmap='gray'); ax[0, 0].set_title("Original")
-            ax[0, 1].imshow(enh2, cmap='gray'); ax[0, 1].set_title("Enh")
-            ax[0, 2].imshow(th, cmap='gray'); ax[0, 2].set_title("Binaria")
-            ax[1, 0].imshow(dist, cmap='jet'); ax[1, 0].set_title("Distance Transform")
-            ax[1, 1].imshow(th_separado, cmap='gray'); ax[1, 1].set_title("Separación (Watershed)")
-            ax[1, 2].imshow(cv2.cvtColor(detected_img, cv2.COLOR_BGR2RGB))
-            ax[1, 2].set_title(f"Colonias detectadas: {colonies_count}")
-            for a in ax.flat: a.axis('off')
-            st.pyplot(fig)
-            plt.close()
+            print("PETRI (cx,cy,r):", (cx_petri, cy_petri, r_petri))
+            print("TEXTIL bbox:", (x_t,y_t,w_t,h_t), "mm_per_px:", mm_per_pixel)
+            print("GROWTH px:", int(np.sum(mask_growth>0)))
+            print("SCAN stats:", stats_scan)
+            print("DT stats:", stats_dt)
 
-        return colonies_count, original_img, detected_img
+        return {
+            "mask_textil_edges": mask_textil_edges,
+            "mask_growth_visual": mask_visual,
+            "avg_scan_mm": avg_scan,
+            "avg_dt_mm": avg_dt,
+            "overlay": overlay_final,
+            "stats_scan": stats_scan,
+            "stats_dt": stats_dt,
+            "petri": (cx_petri, cy_petri, r_petri),
+            "textil": (cx_textil, cy_textil, r_textil),
+            "mm_per_pixel": mm_per_pixel
+        }
 
 
 
