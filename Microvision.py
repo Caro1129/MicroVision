@@ -534,9 +534,10 @@ class MultiStandardAnalyzer:
             mm_per_pixel = 90.0 / (2 * r_petri)
 
         # ===========================
-        # DETECCIÓN TEXTIL CENTRAL
+        # DETECCIÓN TEXTIL CENTRAL (SOLO BORDE BLANCO)
         # ===========================
-        _, mask_textil_white = cv2.threshold(gray, 225, 255, cv2.THRESH_BINARY)
+        # Umbral MUY alto para capturar SOLO lo más blanco (el textil limpio)
+        _, mask_textil_white = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
 
         mask_center = np.zeros_like(gray)
         cv2.circle(mask_center, (cx_petri, cy_petri), int(r_petri * 0.45), 255, -1)
@@ -549,20 +550,18 @@ class MultiStandardAnalyzer:
 
         if len(cnts_t) > 0:
             cnt_textil = max(cnts_t, key=cv2.contourArea)
+            
+            # Obtener bounding box del textil blanco detectado
+            x_t, y_t, w_t, h_t = cv2.boundingRect(cnt_textil)
+            
+            # Crear máscara del textil expandida ligeramente
             mask_textil_filled = np.zeros_like(gray)
-            cv2.drawContours(mask_textil_filled, [cnt_textil], -1, 255, -1)
+            cv2.rectangle(mask_textil_filled, (x_t, y_t), (x_t + w_t, y_t + h_t), 255, -1)
 
-            # Calcular centro real
-            M = cv2.moments(cnt_textil)
-            if M["m00"] != 0:
-                cx_textil = int(M["m10"] / M["m00"])
-                cy_textil = int(M["m01"] / M["m00"])
-            else:
-                cx_textil, cy_textil = cx_petri, cy_petri
-
-            # Radio equivalente
-            area_textil = cv2.contourArea(cnt_textil)
-            r_textil = int(np.sqrt(area_textil / np.pi))
+            # Centro y radio del textil
+            cx_textil = x_t + w_t // 2
+            cy_textil = y_t + h_t // 2
+            r_textil = int(np.sqrt((w_t * h_t) / np.pi))
 
         else:
             raise ValueError("No se detectó textil")
