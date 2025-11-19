@@ -491,11 +491,11 @@ class MultiStandardAnalyzer:
     def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
         import cv2
         import numpy as np
-        
+            
         img = orig_img.copy()
         if img is None:
             raise ValueError("Imagen nula")
-            
+                
         if len(img.shape) == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         elif img.shape[2] == 4:
@@ -504,7 +504,9 @@ class MultiStandardAnalyzer:
         h, w = img.shape[:2]
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        # ---------- PETRI ----------
+        # ----------------------------------------------------
+        # PETRI
+        # ----------------------------------------------------
         blur = cv2.medianBlur(gray, 5)
         edges = cv2.Canny(blur, 60, 150)
 
@@ -529,7 +531,12 @@ class MultiStandardAnalyzer:
         if r_petri > 0:
             mm_per_pixel = 90.0 / (2 * r_petri)
 
-        # ---------- TEXTIL ----------
+        # ----------------------------------------------------
+        # TEXTIL
+        # ----------------------------------------------------
+        # inicializar variables para evitar NameError
+        cx_textil, cy_textil = None, None
+
         _, mask_textil_white = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
 
         mask_center = np.zeros_like(gray)
@@ -545,14 +552,20 @@ class MultiStandardAnalyzer:
 
         cnt_textil = max(cnts_t, key=cv2.contourArea)
 
-        # --- borde real del textil ---
+        # borde real del textil
         mask_textil_filled = np.zeros_like(gray)
         cv2.drawContours(mask_textil_filled, [cnt_textil], -1, 255, -1)
 
         mask_textil_edges = np.zeros_like(gray)
         cv2.drawContours(mask_textil_edges, [cnt_textil], -1, 255, 2)
 
-        # ---------- CRECIMIENTO ----------
+        # centro del textil (corrección principal)
+        (xt, yt), rt = cv2.minEnclosingCircle(cnt_textil)
+        cx_textil, cy_textil = int(xt), int(yt)
+
+        # ----------------------------------------------------
+        # CRECIMIENTO
+        # ----------------------------------------------------
         lap = cv2.Laplacian(gray, cv2.CV_64F)
         lap = cv2.convertScaleAbs(lap)
         _, mask_growth = cv2.threshold(lap, 15, 255, cv2.THRESH_BINARY)
@@ -568,7 +581,7 @@ class MultiStandardAnalyzer:
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
         mask_growth[mask_textil_filled > 0] = 0
 
-        # mejor closing para cerrar huecos
+        # closing
         kernel_g = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel_g, iterations=3)
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_OPEN, kernel_g, iterations=1)
@@ -583,7 +596,9 @@ class MultiStandardAnalyzer:
 
         mask_growth = mask_growth_clean
 
-        # ---------- MÉTODO POR FILAS ----------
+        # ----------------------------------------------------
+        # MÉTODO POR FILAS
+        # ----------------------------------------------------
         halos_mm = []
         mask_visual = np.zeros_like(gray)
         hh, ww = mask_textil_edges.shape
@@ -623,7 +638,9 @@ class MultiStandardAnalyzer:
 
         avg_scan = float(np.mean(halos_mm)) if len(halos_mm) > 0 else 0.0
 
-        # ---------- MÉTODO DISTANCE TRANSFORM ----------
+        # ----------------------------------------------------
+        # DISTANCE TRANSFORM
+        # ----------------------------------------------------
         bin_growth = (mask_growth > 0).astype('uint8')
         inv = (1 - bin_growth).astype('uint8') * 255
         dt = cv2.distanceTransform(inv, cv2.DIST_L2, 5)
@@ -640,7 +657,9 @@ class MultiStandardAnalyzer:
 
         avg_dt = float(np.mean(dist_list_px))*mm_per_pixel if len(dist_list_px)>0 else 0.0
 
-        # ---------- VISUAL ----------
+        # ----------------------------------------------------
+        # VISUAL
+        # ----------------------------------------------------
         overlay = img.copy()
         overlay[mask_textil_filled > 0] = (60, 60, 220)
         overlay[mask_visual > 0] = (0, 255, 0)
@@ -648,31 +667,41 @@ class MultiStandardAnalyzer:
 
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
 
-        # ---------- STATS ----------
+        # ----------------------------------------------------
+        # STATS
+        # ----------------------------------------------------
         def stats_from(lst):
             import numpy as _np
             if len(lst)==0:
                 return {}
             a = _np.array(lst)
-            return {"count":int(a.size),"mean":float(a.mean()),"median":float(_np.median(a)),"std":float(a.std())}
+            return {
+                "count": int(a.size),
+                "mean": float(a.mean()),
+                "median": float(_np.median(a)),
+                "std": float(a.std())
+            }
 
-        stats_scan = stats_from(halos_mm)
         stats_dt = stats_from(np.array(dist_list_px)*mm_per_pixel if len(dist_list_px)>0 else [])
 
         if debug:
             print("PETRI:", (cx_petri, cy_petri, r_petri))
             print("mm_per_px:", mm_per_pixel)
-            print("Scan stats:", stats_scan)
             print("DT stats:", stats_dt)
+            print("Centro textil:", (cx_textil, cy_textil))
 
+        # ----------------------------------------------------
+        # RETORNO FINAL (corregido)
+        # ----------------------------------------------------
         return (
-        mask_textil_edges,          # mask_textil
-        mask_visual,                # mask_microbio
-        avg_dt,                     # avg_halo
-        overlay_final,              # overlay_img
-        stats_dt,                   # measurements
-        (cx_textil, cy_textil)      # halo_center
-    )
+            mask_textil_edges,      # mask_textil
+            mask_visual,            # mask_microbio
+            avg_dt,                 # avg_halo
+            overlay_final,          # overlay_img
+            stats_dt,               # measurements
+            (cx_textil, cy_textil)  # halo_center
+        )
+
     
 
 
