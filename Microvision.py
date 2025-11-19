@@ -496,6 +496,7 @@ class MultiStandardAnalyzer:
 
         import cv2
         import numpy as np
+        import math # Asegurarse de que esté importado si se usa en otro lugar, aunque np.sqrt es suficiente.
 
         img = orig_img.copy()
 
@@ -571,24 +572,30 @@ class MultiStandardAnalyzer:
 
 
         # ===========================
-        # DETECCIÓN DE CRECIMIENTO (AJUSTE RADICAL)
+        # DETECCIÓN DE CRECIMIENTO (AJUSTE CORREGIDO)
+        # 
+        # Corrección 1: Ajuste de umbrales HSV/Grayscale para detectar crecimiento blanco/crema.
         # ===========================
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         mask_growth = np.zeros_like(gray)
 
-        # Estrategia: detectar TODO lo que NO sea el textil blanco ni muy oscuro
-        # Invertir lógica: capturar zonas con CUALQUIER color
-        mask_growth |= cv2.inRange(hsv, np.array([0, 15, 40]), np.array([180, 255, 255]))
+        # Detección de zonas de interés: Alto Valor/Luminosidad, permitiendo baja Saturación.
+        # Esto ayuda a capturar crecimiento blanco/crema sin ser el textil muy brillante.
+        # H: 0-180 (todos), S: 5 (baja saturación), V: 50 (brillo medio).
+        mask_growth = cv2.inRange(hsv, np.array([0, 5, 50]), np.array([180, 255, 255]))
         
-        # Quitar zonas muy blancas (textil) y muy oscuras (fondo)
-        mask_too_bright = cv2.inRange(gray, 230, 255)
+        # Quitar zonas muy oscuras (fondo)
         mask_too_dark = cv2.inRange(gray, 0, 30)
-        mask_growth[mask_too_bright > 0] = 0
         mask_growth[mask_too_dark > 0] = 0
+
+        # Quitar zonas muy brillantes (textil). Usamos 240+ para ser menos restrictivos con el crecimiento claro.
+        # Corrección 2: Aumentamos el umbral a 240 para no eliminar crecimiento blanco.
+        mask_too_bright = cv2.inRange(gray, 240, 255)
+        mask_growth[mask_too_bright > 0] = 0
 
         # quitar textil y limitar a petri
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
-        mask_growth[mask_textil_filled > 0] = 0
+        mask_growth[mask_textil_filled > 0] = 0 # Eliminamos el área del textil
 
         # dar continuidad
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
@@ -598,7 +605,8 @@ class MultiStandardAnalyzer:
         cnts_growth, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_growth_clean = np.zeros_like(gray)
         for cnt in cnts_growth:
-            if cv2.contourArea(cnt) > 30:
+            # Área mínima para considerar un contorno como crecimiento
+            if cv2.contourArea(cnt) > 30: 
                 cv2.drawContours(mask_growth_clean, [cnt], -1, 255, -1)
         
         mask_growth = mask_growth_clean
@@ -606,19 +614,24 @@ class MultiStandardAnalyzer:
         # DEBUG: Si debug=True, mostrar máscaras intermedias
         if debug:
             print(f"Área total de crecimiento detectado: {np.sum(mask_growth > 0)} píxeles")
-            cv2.imshow("DEBUG: Máscara crecimiento", mask_growth)
-            cv2.waitKey(0)
+            # Nota: cv2.imshow y cv2.waitKey solo funcionan en entornos locales.
+            # cv2.imshow("DEBUG: Máscara crecimiento", mask_growth)
+            # cv2.waitKey(0)
 
         # ===========================
         # *LIMITAR MEDICIÓN SOLO A LOS LATERALES*
+        # 
+        # Corrección 3: COMENTAR/ELIMINAR el filtro de banda vertical. 
+        # La función 'medir_y_visualizar' ya se encarga de medir solo en los lados
+        # donde detecta el textil, cumpliendo el requisito.
         # ===========================
-        #banda = np.zeros_like(gray)
-        #ancho = int(w * 0.30)  # mide zona central vertical
-        #banda[:, w//2 - ancho//2 : w//2 + ancho//2] = 255
-        #mask_growth = cv2.bitwise_and(mask_growth, banda)
+        # banda = np.zeros_like(gray)
+        # ancho = int(w * 0.30)  # mide zona central vertical
+        # banda[:, w//2 - ancho//2 : w//2 + ancho//2] = 255
+        # mask_growth = cv2.bitwise_and(mask_growth, banda)
 
         # ===========================
-        # MEDICIÓN Y VISUALIZACIÓN MEJORADA
+        # MEDICIÓN Y VISUALIZACIÓN MEJORADA (Lógica correcta para el promedio lateral)
         # ===========================
         def medir_y_visualizar(mask_textil, mask_micro, mm_per_pixel):
             hh, ww = mask_textil.shape
@@ -630,11 +643,12 @@ class MultiStandardAnalyzer:
             if debug:
                 print(f"Área de crecimiento para medición: {area_growth} píxeles")
             
-            if area_growth < 100:  # Muy permisivo
+            if area_growth < 100:  # Si no hay crecimiento, retorna 0.0
                 if debug:
                     print("⚠️ Área insuficiente para medir")
                 return 0.0, mask_visual
             
+            # Iterar verticalmente a lo largo del textil (muestreo)
             for y_scan in range(0, hh, 3):
                 fila_t = mask_textil[y_scan]
                 fila_m = mask_micro[y_scan]
@@ -647,50 +661,57 @@ class MultiStandardAnalyzer:
                 x_right = int(idx_textil[-1])
                 
                 # izquierda
+                # Busca el último píxel de crecimiento ANTES del borde izquierdo del textil
                 idx_m_left = np.where(fila_m[:x_left] > 0)[0]
                 if idx_m_left.size > 0:
                     x_start = idx_m_left[-1]
                     halo_px = x_left - x_start
                     if halo_px > 2 and halo_px < 200:
                         halos_mm.append(halo_px * mm_per_pixel)
+                        # Colorear la zona medida
                         mask_visual[y_scan, x_start:x_left] = 255
                 
                 # derecha
+                # Busca el primer píxel de crecimiento DESPUÉS del borde derecho del textil
                 idx_m_right = np.where(fila_m[x_right+1:] > 0)[0]
                 if idx_m_right.size > 0:
                     x_end = idx_m_right[0] + x_right + 1
                     halo_px = x_end - x_right
                     if halo_px > 2 and halo_px < 200:
                         halos_mm.append(halo_px * mm_per_pixel)
+                        # Colorear la zona medida
                         mask_visual[y_scan, x_right:x_end] = 255
+                
+                if debug:
+                    if len(halos_mm) > 0:
+                        print(f"Línea {y_scan}: Medido {halo_px * mm_per_pixel:.2f} mm")
             
             if debug:
-                print(f"Mediciones recolectadas: {len(halos_mm)}")
-                if len(halos_mm) > 0:
-                    print(f"Promedio: {np.mean(halos_mm):.2f} mm")
+                print(f"Mediciones totales recolectadas: {len(halos_mm)}")
             
             if len(halos_mm) == 0:
                 return 0.0, mask_visual
             
+            # Se retorna el promedio de todas las mediciones laterales
             return float(np.mean(halos_mm)), mask_visual
 
         avg, mask_growth_visual = medir_y_visualizar(mask_textil_filled, mask_growth, mm_per_pixel)
 
         # ===========================
-        # VISUAL (usando la nueva máscara limpia)
+        # VISUAL
         # ===========================
         overlay = img.copy()
-        overlay[mask_textil_filled > 0] = (60, 60, 220)  # textil azul
-        overlay[mask_growth_visual > 0] = (60, 220, 60)  # halo verde (SOLO lo medido)
+        overlay[mask_textil_filled > 0] = (60, 60, 220)  # textil azul
+        overlay[mask_growth_visual > 0] = (60, 220, 60)  # halo verde (SOLO lo medido)
 
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
 
         return (
             mask_textil_filled,
-            mask_growth_visual,  # Ahora retorna la máscara limpia
-            avg,
+            mask_growth_visual, 
+            avg, # ESTE ES EL PROMEDIO QUE BUSCAS
             overlay_final,
-            None,  # line_measurements
+            None,  # line_measurements
             (cx_textil, cy_textil, r_textil)
         )
 
