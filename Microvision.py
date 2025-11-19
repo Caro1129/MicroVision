@@ -627,6 +627,28 @@ class MultiStandardAnalyzer:
         # Eliminar textil
         mask_growth[mask_textil_filled > 0] = 0
 
+        # ===========================================
+        # ELIMINAR LÍNEAS ARTIFICIALES VERDES/AZULES
+        # ===========================================
+        # Estas líneas nunca son crecimiento. 
+        # Son tintes del agar y SIEMPRE están fuera del textil.
+        lower_artifact = np.array([80, 30, 40])    # azul-verde (cyan)
+        upper_artifact = np.array([130, 255, 255])
+        mask_artifacts = cv2.inRange(hsv, lower_artifact, upper_artifact)
+
+        # Quitar artefactos del crecimiento
+        mask_growth[mask_artifacts > 0] = 0
+
+        # ===========================================
+        # ELIMINAR TODA LA BANDA HORIZONTAL DONDE ESTÁN LAS LÍNEAS
+        # ===========================================
+        # Asegura que nunca analice esas líneas pintadas
+        band_height = int(r_petri * 0.15)  # banda moderada
+        y1 = cy_textil - band_height
+        y2 = cy_textil + band_height
+        mask_growth[y1:y2, :] = 0
+
+
         
         # 5. APLICAR máscara de petri
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
