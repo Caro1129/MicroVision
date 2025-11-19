@@ -643,7 +643,7 @@ class MultiStandardAnalyzer:
             if debug:
                 print(f"Área de crecimiento para medición: {area_growth} píxeles")
             
-            if area_growth < 100:  # Si no hay crecimiento, retorna 0.0
+            if area_growth < 100: 
                 if debug:
                     print("⚠️ Área insuficiente para medir")
                 return 0.0, mask_visual
