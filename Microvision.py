@@ -546,12 +546,27 @@ class MultiStandardAnalyzer:
         mask_textil_white = cv2.morphologyEx(mask_textil_white, cv2.MORPH_CLOSE, kernel_t, iterations=2)
 
         cnts_t, _ = cv2.findContours(mask_textil_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
         if len(cnts_t) > 0:
             cnt_textil = max(cnts_t, key=cv2.contourArea)
             mask_textil_filled = np.zeros_like(gray)
             cv2.drawContours(mask_textil_filled, [cnt_textil], -1, 255, -1)
+
+            # 🔥 Calcular centro real
+            M = cv2.moments(cnt_textil)
+            if M["m00"] != 0:
+                cx_textil = int(M["m10"] / M["m00"])
+                cy_textil = int(M["m01"] / M["m00"])
+            else:
+                cx_textil, cy_textil = cx_petri, cy_petri
+
+            # 🔥 Radio equivalente
+            area_textil = cv2.contourArea(cnt_textil)
+            r_textil = int(np.sqrt(area_textil / np.pi))
+
         else:
             raise ValueError("No se detectó textil")
+
 
         # ===========================
         # DETECCIÓN DE CRECIMIENTO (RANGOS AMPLIADOS)
