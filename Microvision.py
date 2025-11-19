@@ -701,8 +701,8 @@ class MultiStandardAnalyzer:
         # VISUAL
         # ===========================
         overlay = img.copy()
-        overlay[mask_textil_filled > 0] = (60, 60, 220)  # textil azul
-        overlay[mask_growth_visual > 0] = (60, 220, 60)  # halo verde (SOLO lo medido)
+        overlay[mask_textil_filled > 0] = (60, 60, 220) 
+        overlay[mask_growth_visual > 0] = (60, 220, 60) 
 
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
 
