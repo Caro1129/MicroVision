@@ -639,14 +639,26 @@ class MultiStandardAnalyzer:
         # Quitar artefactos del crecimiento
         mask_growth[mask_artifacts > 0] = 0
 
-        # ===========================================
-        # ELIMINAR TODA LA BANDA HORIZONTAL DONDE ESTÁN LAS LÍNEAS
-        # ===========================================
-        # Asegura que nunca analice esas líneas pintadas
-        band_height = int(r_petri * 0.15)  # banda moderada
-        y1 = cy_textil - band_height
-        y2 = cy_textil + band_height
-        mask_growth[y1:y2, :] = 0
+        # DETECTAR FRANJA VERTICAL DONDE ESTÁN LAS LÍNEAS ARTIFICIALES
+        # Sacar máscara de líneas (cyan/verde claro)
+        lower_line = np.array([70, 30, 40])
+        upper_line = np.array([150, 255, 255])
+        mask_lines = cv2.inRange(hsv, lower_line, upper_line)
+
+        # Encontrar bounding box vertical de esas líneas
+        ys, xs = np.where(mask_lines > 0)
+
+        if len(ys) > 0:
+            y_min = np.min(ys) - 10
+            y_max = np.max(ys) + 10
+
+            # Limitar a la imagen
+            y_min = max(0, y_min)
+            y_max = min(h - 1, y_max)
+
+            # Eliminar completamente esa franja
+            mask_growth[y_min:y_max, :] = 0
+
 
 
         
