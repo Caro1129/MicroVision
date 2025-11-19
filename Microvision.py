@@ -665,18 +665,14 @@ class MultiStandardAnalyzer:
             print("Scan stats:", stats_scan)
             print("DT stats:", stats_dt)
 
-        return {
-            "mask_textil_edges": mask_textil_edges,
-            "mask_growth_visual": mask_visual,
-            "avg_scan_mm": avg_scan,
-            "avg_dt_mm": avg_dt,
-            "overlay": overlay_final,
-            "stats_scan": stats_scan,
-            "stats_dt": stats_dt,
-            "petri": (cx_petri, cy_petri, r_petri),
-            "mm_per_pixel": mm_per_pixel
-        }
-
+        return (
+        mask_textil_edges,          # mask_textil
+        mask_visual,                # mask_microbio
+        avg_dt,                     # avg_halo
+        overlay_final,              # overlay_img
+        stats_dt,                   # measurements
+        (cx_textil, cy_textil)      # halo_center
+    )
     
 
 
