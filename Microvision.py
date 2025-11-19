@@ -545,29 +545,24 @@ class MultiStandardAnalyzer:
             print(f"Calibración: {mm_per_pixel:.4f} mm/px, Radio Petri: {r_petri} px")
 
         # ===========================
-        # DETECCIÓN DEL TEXTIL (UMBRA LARGO FIJO + CENTRADO)
+        # DETECCIÓN DEL TEXTIL
         # ===========================
-        # Umbral alto para blanco puro (evita pintar toda la Petri)
         _, mask_textil_white = cv2.threshold(gray, 230, 255, cv2.THRESH_BINARY)
 
-        # Mantener solo la región central de la Petri (donde está el textil)
         mask_center = np.zeros_like(gray)
         cv2.circle(mask_center, (cx_petri, cy_petri), int(r_petri * 0.40), 255, -1)
         mask_textil_white = cv2.bitwise_and(mask_textil_white, mask_center)
 
-        # Limpieza del textil
         kernel_t = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         mask_textil_white = cv2.morphologyEx(mask_textil_white, cv2.MORPH_CLOSE, kernel_t, iterations=2)
         mask_textil_white = cv2.morphologyEx(mask_textil_white, cv2.MORPH_OPEN, kernel_t, iterations=1)
 
-        # Encontrar contorno del textil
         cnts_t, _ = cv2.findContours(mask_textil_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if len(cnts_t) > 0:
             cnt_textil = max(cnts_t, key=cv2.contourArea)
-            # Asegurar que el contorno no sea demasiado grande (defensa)
             area_textil = cv2.contourArea(cnt_textil)
+
             if area_textil > 0.9 * np.pi * (r_petri ** 2):
-                # fallback a estimación pequeña en el centro
                 cx_textil, cy_textil = cx_petri, cy_petri
                 r_textil = int(r_petri * 0.12)
                 textil_contour = np.array([
@@ -577,19 +572,21 @@ class MultiStandardAnalyzer:
                 ], dtype=np.int32)
                 mask_textil_filled = np.zeros_like(gray)
                 cv2.drawContours(mask_textil_filled, [textil_contour], -1, 255, -1)
+
             else:
                 textil_contour = cnt_textil
                 mask_textil_filled = np.zeros_like(gray)
                 cv2.drawContours(mask_textil_filled, [textil_contour], -1, 255, -1)
+
                 M = cv2.moments(cnt_textil)
                 if M.get("m00", 0) != 0:
                     cx_textil = int(M["m10"] / M["m00"])
                     cy_textil = int(M["m01"] / M["m00"])
                 else:
                     cx_textil, cy_textil = cx_petri, cy_petri
+
                 r_textil = int(np.sqrt(area_textil / np.pi))
         else:
-            # No detectó textil: fallback al centro (pequeño círculo)
             cx_textil, cy_textil = cx_petri, cy_petri
             r_textil = int(r_petri * 0.12)
             textil_contour = np.array([
@@ -600,13 +597,8 @@ class MultiStandardAnalyzer:
             mask_textil_filled = np.zeros_like(gray)
             cv2.drawContours(mask_textil_filled, [textil_contour], -1, 255, -1)
 
-        if debug:
-            print(f"Textil: centro=({cx_textil},{cy_textil}), radio={r_textil} px = {r_textil*mm_per_pixel:.2f} mm")
-            # debug: show textil area size
-            # print("Area textil px:", np.sum(mask_textil_filled>0))
-
         # ===========================
-        # DETECCIÓN DEL CRECIMIENTO (BEIGE / VERDE)
+        # DETECCIÓN DE CRECIMIENTO
         # ===========================
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
@@ -621,23 +613,23 @@ class MultiStandardAnalyzer:
         mask_growth = cv2.bitwise_or(mask_yellow, mask_green)
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
 
-        # Quitar textil
         mask_growth[mask_textil_filled > 0] = 0
 
-        # Eliminar artefactos cyan/azules (líneas pintadas)
+        # ===========================
+        # FILTRADO DE ARTEFACTOS CYAN
+        # ===========================
         lower_artifact = np.array([80, 30, 40])
         upper_artifact = np.array([140, 255, 255])
         mask_artifacts = cv2.inRange(hsv, lower_artifact, upper_artifact)
-        # Detectar franja vertical real de dichos artefactos y eliminar de mask_growth
+
         ys_art, xs_art = np.where(mask_artifacts > 0)
         if len(ys_art) > 0:
             y_min = max(0, np.min(ys_art) - 5)
             y_max = min(h - 1, np.max(ys_art) + 5)
             mask_growth[y_min:y_max, :] = 0
-        # También quitar píxeles aislados por color
+
         mask_growth[mask_artifacts > 0] = 0
 
-        # limpieza final
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=1)
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_OPEN, kernel, iterations=1)
@@ -646,86 +638,78 @@ class MultiStandardAnalyzer:
             print(f"Píxeles de crecimiento detectados: {np.sum(mask_growth>0)}")
 
         # ===========================
-        # MEDICIÓN LATERAL (fila por fila)
+        # 🔧 NUEVA FUNCIÓN DE MEDICIÓN MEJORADA
         # ===========================
         def medir_halo_lateral(mask_textil, mask_micro, mm_per_pixel):
             hh, ww = mask_textil.shape
             halos_mm = []
 
-            # Barrido cada 3 px (más preciso que 5 px si la imagen es buena)
             step = 3
             for y_scan in range(0, hh, step):
                 fila_t = mask_textil[y_scan]
                 fila_m = mask_micro[y_scan]
 
-                # Si no hay textil en esta fila, saltar
                 idx_textil = np.where(fila_t > 0)[0]
                 if idx_textil.size == 0:
                     continue
 
-                # bordes textil
                 x_left = int(idx_textil[0])
                 x_right = int(idx_textil[-1])
 
-                # Izquierda: buscar micelio hacia afuera (col decreciente desde borde)
-                if x_left - 1 >= 0:
-                    idx_m_left = np.where(fila_m[:x_left] > 0)[0]
-                    if idx_m_left.size > 0:
-                        x_ml = int(idx_m_left[-1])
-                        halo_px = x_left - x_ml
+                if x_left > 2:
+                    zona_izq = fila_m[:x_left]
+                    idx_m = np.where(zona_izq > 0)[0]
+                    if idx_m.size > 0:
+                        x_m = int(idx_m[-1])
+                        halo_px = x_left - x_m
                         if halo_px > 0:
                             halos_mm.append(halo_px * mm_per_pixel)
 
-                # Derecha: buscar micelio hacia afuera (col creciente desde borde)
-                if x_right + 1 < ww:
-                    idx_m_right = np.where(fila_m[x_right+1:] > 0)[0]
-                    if idx_m_right.size > 0:
-                        x_mr = int(idx_m_right[0]) + x_right + 1
-                        halo_px = x_mr - x_right
+                if x_right < ww - 2:
+                    zona_der = fila_m[x_right+1:]
+                    idx_m = np.where(zona_der > 0)[0]
+                    if idx_m.size > 0:
+                        x_m = int(idx_m[0]) + x_right + 1
+                        halo_px = x_m - x_right
                         if halo_px > 0:
                             halos_mm.append(halo_px * mm_per_pixel)
 
             if len(halos_mm) == 0:
                 return 0.0, []
-            # eliminar outliers extremos (si hay) usando mediana y MAD
+
             arr = np.array(halos_mm)
             med = np.median(arr)
             mad = np.median(np.abs(arr - med)) + 1e-9
             filtered = arr[np.abs(arr - med) <= 3 * mad]
             if filtered.size == 0:
                 filtered = arr
+
             return float(np.mean(filtered)), filtered.tolist()
 
+        # Ejecutar medición
         avg_halo_mm, line_measurements = medir_halo_lateral(mask_textil_filled, mask_growth, mm_per_pixel)
 
         # ===========================
         # VISUALIZACIÓN
         # ===========================
         overlay = img.copy()
-        # Colorear textil morado (solo la máscara real)
         overlay[mask_textil_filled > 0] = (60, 60, 220)
-        # crecimiento verde
         overlay[mask_growth > 0] = (60, 220, 60)
 
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
         overlay_final = cv2.bitwise_and(overlay_final, overlay_final, mask=mask_petri)
 
-        # Dibujar contorno del textil (si existe)
         try:
             cv2.drawContours(overlay_final, [textil_contour], -1, (0, 0, 255), 2)
         except:
             pass
 
-        # Texto de resultados
-        if avg_halo_mm > 0:
-            color_text = (0, 255, 0)
-        else:
-            color_text = (0, 0, 255)
+        color_text = (0, 255, 0) if avg_halo_mm > 0 else (0, 0, 255)
         cv2.putText(overlay_final, f"Halo lateral: {avg_halo_mm:.2f} mm", (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_text, 2)
 
         # ===========================
-        # RETORNO
+        # RETORNO FINAL
         # ===========================
         return (
             mask_textil_filled,
@@ -736,8 +720,6 @@ class MultiStandardAnalyzer:
             (cx_textil, cy_textil, r_textil)
         )
 
-
-  
 
    
 
