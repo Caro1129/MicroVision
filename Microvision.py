@@ -488,16 +488,14 @@ class MultiStandardAnalyzer:
         return pca_img
     
 
-
     def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
         import cv2
         import numpy as np
-
+        
         img = orig_img.copy()
         if img is None:
             raise ValueError("Imagen nula")
-
-        # Normalizar formato BGR
+            
         if len(img.shape) == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
         elif img.shape[2] == 4:
@@ -509,62 +507,57 @@ class MultiStandardAnalyzer:
         # ---------- PETRI ----------
         blur = cv2.medianBlur(gray, 5)
         edges = cv2.Canny(blur, 60, 150)
+
         circles = cv2.HoughCircles(
             edges, cv2.HOUGH_GRADIENT, dp=1.2, minDist=100,
             param1=80, param2=30,
             minRadius=int(min(h, w) * 0.25),
             maxRadius=int(min(h, w) * 0.48)
         )
+
         mask_petri = np.zeros_like(gray)
+
         if circles is not None:
             x, y, r = np.uint16(np.around(circles[0][0]))
             cx_petri, cy_petri, r_petri = int(x), int(y), int(r)
         else:
             cx_petri, cy_petri, r_petri = w//2, h//2, int(min(h, w)*0.45)
+
         cv2.circle(mask_petri, (cx_petri, cy_petri), max(1, r_petri - 5), 255, -1)
 
-        # calibración a 90 mm diámetro interno
+        # calibración interna Petri 90mm
         if r_petri > 0:
             mm_per_pixel = 90.0 / (2 * r_petri)
 
-        # Sanity check mm_per_pixel
-        if not (0.01 < mm_per_pixel < 5.0):
-            if debug:
-                print(f"[WARN] mm_per_pixel inusual: {mm_per_pixel}")
-
         # ---------- TEXTIL ----------
         _, mask_textil_white = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY)
+
         mask_center = np.zeros_like(gray)
         cv2.circle(mask_center, (cx_petri, cy_petri), int(r_petri * 0.45), 255, -1)
         mask_textil_white = cv2.bitwise_and(mask_textil_white, mask_center)
-        kernel_t = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+
+        kernel_t = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         mask_textil_white = cv2.morphologyEx(mask_textil_white, cv2.MORPH_CLOSE, kernel_t, iterations=2)
+
         cnts_t, _ = cv2.findContours(mask_textil_white, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if len(cnts_t) == 0:
             raise ValueError("No se detectó textil")
+
         cnt_textil = max(cnts_t, key=cv2.contourArea)
-        x_t, y_t, w_t, h_t = cv2.boundingRect(cnt_textil)
 
+        # --- borde real del textil ---
         mask_textil_filled = np.zeros_like(gray)
-        cv2.rectangle(mask_textil_filled, (x_t, y_t), (x_t + w_t, y_t + h_t), 255, -1)
+        cv2.drawContours(mask_textil_filled, [cnt_textil], -1, 255, -1)
 
-        # bordes laterales con tolerancia (2-3 px)
         mask_textil_edges = np.zeros_like(gray)
-        left_col = max(0, x_t)
-        right_col = min(w-1, x_t + w_t - 1)
-        mask_textil_edges[:, max(0, left_col-1): min(w, left_col+2)] = 255
-        mask_textil_edges[:, max(0, right_col-1): min(w, right_col+2)] = 255
+        cv2.drawContours(mask_textil_edges, [cnt_textil], -1, 255, 2)
 
-        cx_textil = x_t + w_t // 2
-        cy_textil = y_t + h_t // 2
-        r_textil = int(np.sqrt((w_t * h_t) / np.pi))
-
-        # ---------- CRECIMIENTO (LAPLACIAN) ----------
+        # ---------- CRECIMIENTO ----------
         lap = cv2.Laplacian(gray, cv2.CV_64F)
         lap = cv2.convertScaleAbs(lap)
         _, mask_growth = cv2.threshold(lap, 15, 255, cv2.THRESH_BINARY)
 
-        # fallback HSV si poco detectado
+        # fallback HSV
         if np.sum(mask_growth > 0) < 200:
             hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
             mask_hsv = cv2.inRange(hsv, np.array([0,5,50]), np.array([180,255,255]))
@@ -574,31 +567,39 @@ class MultiStandardAnalyzer:
 
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
         mask_growth[mask_textil_filled > 0] = 0
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
-        mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-        # limpiar ruido
+        # mejor closing para cerrar huecos
+        kernel_g = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))
+        mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel_g, iterations=3)
+        mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_OPEN, kernel_g, iterations=1)
+
+        # quitar ruido
         cnts_g, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_growth_clean = np.zeros_like(gray)
+
         for c in cnts_g:
             if cv2.contourArea(c) > 30:
                 cv2.drawContours(mask_growth_clean, [c], -1, 255, -1)
+
         mask_growth = mask_growth_clean
 
-        # ---------- MEDICIÓN POR FILAS (mejorada) ----------
+        # ---------- MÉTODO POR FILAS ----------
         halos_mm = []
         mask_visual = np.zeros_like(gray)
         hh, ww = mask_textil_edges.shape
+
         for y_scan in range(0, hh, 3):
             fila_t = mask_textil_edges[y_scan]
             fila_m = mask_growth[y_scan]
+
             idx_textil = np.where(fila_t > 0)[0]
             if idx_textil.size < 2:
                 continue
-            x_left = int(idx_textil.min())
-            x_right = int(idx_textil.max())
 
-            # Buscar el píxel de crecimiento más cercano a la izquierda (último antes del borde)
+            x_left = idx_textil.min()
+            x_right = idx_textil.max()
+
+            # izquierda
             if x_left > 0:
                 left_region = fila_m[:x_left]
                 idx_m_left = np.where(left_region > 0)[0]
@@ -609,7 +610,7 @@ class MultiStandardAnalyzer:
                         halos_mm.append(halo_px * mm_per_pixel)
                         mask_visual[y_scan, x_start:x_left] = 255
 
-            # Buscar el píxel de crecimiento más cercano a la derecha (primer después del borde)
+            # derecha
             if x_right < ww-1:
                 right_region = fila_m[x_right+1:]
                 idx_m_right = np.where(right_region > 0)[0]
@@ -622,18 +623,21 @@ class MultiStandardAnalyzer:
 
         avg_scan = float(np.mean(halos_mm)) if len(halos_mm) > 0 else 0.0
 
-        # ---------- MÉTODO ROBUSTO: DISTANCE TRANSFORM ----------
+        # ---------- MÉTODO DISTANCE TRANSFORM ----------
         bin_growth = (mask_growth > 0).astype('uint8')
         inv = (1 - bin_growth).astype('uint8') * 255
         dt = cv2.distanceTransform(inv, cv2.DIST_L2, 5)
+
         border_coords = np.column_stack(np.where(mask_textil_edges > 0))
         dist_list_px = []
+
         for (y, x) in border_coords:
             if mask_petri[y, x] == 0:
                 continue
             val = dt[y, x]
-            if val > 0 and val < 1000:
+            if 0 < val < 1000:
                 dist_list_px.append(val)
+
         avg_dt = float(np.mean(dist_list_px))*mm_per_pixel if len(dist_list_px)>0 else 0.0
 
         # ---------- VISUAL ----------
@@ -641,9 +645,10 @@ class MultiStandardAnalyzer:
         overlay[mask_textil_filled > 0] = (60, 60, 220)
         overlay[mask_visual > 0] = (0, 255, 0)
         overlay[mask_growth > 0] = (60, 220, 60)
+
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
 
-        # ---------- ESTADÍSTICAS ----------
+        # ---------- STATS ----------
         def stats_from(lst):
             import numpy as _np
             if len(lst)==0:
@@ -655,34 +660,24 @@ class MultiStandardAnalyzer:
         stats_dt = stats_from(np.array(dist_list_px)*mm_per_pixel if len(dist_list_px)>0 else [])
 
         if debug:
-            print("PETRI (cx,cy,r):", (cx_petri, cy_petri, r_petri))
-            print("TEXTIL bbox:", (x_t,y_t,w_t,h_t), "mm_per_px:", mm_per_pixel)
-            print("GROWTH px:", int(np.sum(mask_growth>0)))
-            print("SCAN stats:", stats_scan)
+            print("PETRI:", (cx_petri, cy_petri, r_petri))
+            print("mm_per_px:", mm_per_pixel)
+            print("Scan stats:", stats_scan)
             print("DT stats:", stats_dt)
 
-        # -----------------------
-        # Construir measurements y avg_halo final
-        # -----------------------
-        measurements = {
-            "halos_scan_mm_list": halos_mm,
-            "dist_list_px": dist_list_px,
+        return {
+            "mask_textil_edges": mask_textil_edges,
+            "mask_growth_visual": mask_visual,
+            "avg_scan_mm": avg_scan,
+            "avg_dt_mm": avg_dt,
+            "overlay": overlay_final,
             "stats_scan": stats_scan,
-            "stats_dt": stats_dt
+            "stats_dt": stats_dt,
+            "petri": (cx_petri, cy_petri, r_petri),
+            "mm_per_pixel": mm_per_pixel
         }
 
-        # Elegir avg_halo: preferir método robusto (avg_dt) si disponible
-        avg_halo = avg_dt if avg_dt > 0 else avg_scan
-
-        halo_center = (cx_textil, cy_textil, r_textil)
-
-        # Retornar TUPLA con los 6 valores que analyze_by_standard espera
-        return (mask_textil_filled,          # mask_textil
-                mask_growth,                # mask_microbio
-                avg_halo,                   # avg_halo (mm)
-                overlay_final,              # overlay_img
-                measurements,               # measurements (dict)
-                halo_center)                # halo_center (x,y,r)
+    
 
 
 
