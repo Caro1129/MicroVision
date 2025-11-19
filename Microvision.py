@@ -633,13 +633,13 @@ class MultiStandardAnalyzer:
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
 
         return (
-            mask_textil_filled,
-            mask_growth,
-            avg,
-            overlay_final,
-            None,
-            None
-        )
+        mask_textil_filled,
+        mask_growth,
+        avg,
+        overlay_final,
+        None,  # line_measurements (si lo necesitas luego lo activo)
+        (cx_textil, cy_textil, r_textil)
+    )
 
 
 
