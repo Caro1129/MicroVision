@@ -616,13 +616,17 @@ class MultiStandardAnalyzer:
         # 3. DETECCIÓN POR DIFERENCIA DE INTENSIDAD con fondo
         # El agar sin crecimiento es más oscuro que con crecimiento
         # Detectar áreas que NO son muy oscuras NI muy blancas
-        _, mask_mid_gray = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY)
-        _, mask_not_white = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
-        mask_mid_tone = cv2.bitwise_and(mask_mid_gray, mask_not_white)
         
-        # 4. COMBINAR todas las detecciones
+        # No usar tonos medios (genera falsos positivos)
+        mask_mid_tone = np.zeros_like(gray)
+
+        # Solo crecimiento amarillento o verde
         mask_growth = cv2.bitwise_or(mask_yellow, mask_green)
-        mask_growth = cv2.bitwise_or(mask_growth, mask_mid_tone)
+        mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
+
+        # Eliminar textil
+        mask_growth[mask_textil_filled > 0] = 0
+
         
         # 5. APLICAR máscara de petri
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
@@ -677,7 +681,6 @@ class MultiStandardAnalyzer:
                 if mask_textil_filled[y, x] == 0:
                     textil_edge_dist = i
                     break
-            
             # Encontrar primer punto de crecimiento
             growth_start_dist = None
             if textil_edge_dist is not None:
