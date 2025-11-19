@@ -571,36 +571,43 @@ class MultiStandardAnalyzer:
 
 
         # ===========================
-        # DETECCIÓN DE CRECIMIENTO (RANGOS BALANCEADOS)
+        # DETECCIÓN DE CRECIMIENTO (AJUSTE RADICAL)
         # ===========================
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         mask_growth = np.zeros_like(gray)
 
-        # beige / verdoso
-        mask_growth |= cv2.inRange(hsv, np.array([15, 25, 55]), np.array([40, 200, 255]))
-
-        # VERDE
-        mask_growth |= cv2.inRange(hsv, np.array([35, 25, 45]), np.array([90, 255, 255]))
-
-        # TURQUESA MUY TENUE (crucial para estos halos)
-        mask_growth |= cv2.inRange(hsv, np.array([80, 15, 45]), np.array([110, 180, 255]))
+        # Estrategia: detectar TODO lo que NO sea el textil blanco ni muy oscuro
+        # Invertir lógica: capturar zonas con CUALQUIER color
+        mask_growth |= cv2.inRange(hsv, np.array([0, 15, 40]), np.array([180, 255, 255]))
+        
+        # Quitar zonas muy blancas (textil) y muy oscuras (fondo)
+        mask_too_bright = cv2.inRange(gray, 230, 255)
+        mask_too_dark = cv2.inRange(gray, 0, 30)
+        mask_growth[mask_too_bright > 0] = 0
+        mask_growth[mask_too_dark > 0] = 0
 
         # quitar textil y limitar a petri
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
         mask_growth[mask_textil_filled > 0] = 0
 
-        # dar continuidad a bordes delgados
+        # dar continuidad
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=2)
         
-        # Eliminar solo ruido MUY pequeño (mínimo 50 píxeles)
+        # Eliminar solo ruido muy pequeño
         cnts_growth, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_growth_clean = np.zeros_like(gray)
         for cnt in cnts_growth:
-            if cv2.contourArea(cnt) > 50:  # Menos estricto
+            if cv2.contourArea(cnt) > 30:
                 cv2.drawContours(mask_growth_clean, [cnt], -1, 255, -1)
         
         mask_growth = mask_growth_clean
+        
+        # DEBUG: Si debug=True, mostrar máscaras intermedias
+        if debug:
+            print(f"Área total de crecimiento detectado: {np.sum(mask_growth > 0)} píxeles")
+            cv2.imshow("DEBUG: Máscara crecimiento", mask_growth)
+            cv2.waitKey(0)
 
         # ===========================
         # *LIMITAR MEDICIÓN SOLO A LOS LATERALES*
@@ -618,9 +625,14 @@ class MultiStandardAnalyzer:
             halos_mm = []
             mask_visual = np.zeros_like(mask_textil)
             
-            # Validar que hay suficiente crecimiento (menos estricto)
+            # Validar que hay suficiente crecimiento
             area_growth = np.sum(mask_micro > 0)
-            if area_growth < 200:  # Bajado de 500 a 200
+            if debug:
+                print(f"Área de crecimiento para medición: {area_growth} píxeles")
+            
+            if area_growth < 100:  # Muy permisivo
+                if debug:
+                    print("⚠️ Área insuficiente para medir")
                 return 0.0, mask_visual
             
             for y_scan in range(0, hh, 3):
@@ -639,7 +651,7 @@ class MultiStandardAnalyzer:
                 if idx_m_left.size > 0:
                     x_start = idx_m_left[-1]
                     halo_px = x_left - x_start
-                    if halo_px > 2 and halo_px < 150:  # Aumentado límite
+                    if halo_px > 2 and halo_px < 200:
                         halos_mm.append(halo_px * mm_per_pixel)
                         mask_visual[y_scan, x_start:x_left] = 255
                 
@@ -648,9 +660,14 @@ class MultiStandardAnalyzer:
                 if idx_m_right.size > 0:
                     x_end = idx_m_right[0] + x_right + 1
                     halo_px = x_end - x_right
-                    if halo_px > 2 and halo_px < 150:  # Aumentado límite
+                    if halo_px > 2 and halo_px < 200:
                         halos_mm.append(halo_px * mm_per_pixel)
                         mask_visual[y_scan, x_right:x_end] = 255
+            
+            if debug:
+                print(f"Mediciones recolectadas: {len(halos_mm)}")
+                if len(halos_mm) > 0:
+                    print(f"Promedio: {np.mean(halos_mm):.2f} mm")
             
             if len(halos_mm) == 0:
                 return 0.0, mask_visual
