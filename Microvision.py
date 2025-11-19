@@ -711,7 +711,7 @@ class MultiStandardAnalyzer:
             mask_growth_visual, 
             avg, # ESTE ES EL PROMEDIO QUE BUSCAS
             overlay_final,
-            None,  # line_measurements
+            None,
             (cx_textil, cy_textil, r_textil)
         )
 
