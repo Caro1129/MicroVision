@@ -492,13 +492,12 @@ class MultiStandardAnalyzer:
 
 
 
-    def analyze_halo_TM147_improved(self, orig_img, mm_per_pixel=None, petri_diameter_mm=90.0, debug=False):
+    def analyze_halo_TM147_visual_final(self, orig_img, mm_per_pixel=0.05, debug=False):
         """
-        Análisis mejorado de halo de inhibición con múltiples mejoras:
-        - Calibración manual opcional
-        - Medición en todas las direcciones (360°)
-        - Detección mejorada de bordes del textil
-        - Validación de mediciones
+        Análisis mejorado de halo de inhibición TM147
+        - Medición radial en 360°
+        - Detección mejorada de textil y crecimiento
+        - Estadísticas robustas con filtrado de outliers
         """
         img = orig_img.copy()
         
@@ -536,90 +535,71 @@ class MultiStandardAnalyzer:
         cv2.circle(mask_petri, (cx_petri, cy_petri), r_petri - 5, 255, -1)
         
         # ===========================
-        # CALIBRACIÓN
+        # CALIBRACIÓN AUTOMÁTICA
         # ===========================
-        if mm_per_pixel is None and r_petri > 0:
-            mm_per_pixel = petri_diameter_mm / (2 * r_petri)
-        elif mm_per_pixel is None:
-            mm_per_pixel = 0.05  # Valor por defecto
-        
-        if debug:
-            print(f"Calibración: {mm_per_pixel:.4f} mm/px")
-            print(f"Radio Petri: {r_petri} px = {r_petri * mm_per_pixel:.1f} mm")
+        diametro_real_mm = 90.0
+        if r_petri > 0:
+            mm_per_pixel = diametro_real_mm / (2 * r_petri)
         
         # ===========================
         # DETECCIÓN DEL TEXTIL MEJORADA
         # ===========================
-        # Usar múltiples umbrales para detectar mejor el textil
-        _, mask_textil_1 = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
-        _, mask_textil_2 = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+        _, mask_textil = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY)
+        _, mask_textil_2 = cv2.threshold(gray, 185, 255, cv2.THRESH_BINARY)
+        mask_textil = cv2.bitwise_or(mask_textil, mask_textil_2)
         
-        # Combinar máscaras
-        mask_textil = cv2.bitwise_or(mask_textil_1, mask_textil_2)
         mask_textil = cv2.morphologyEx(
             mask_textil,
             cv2.MORPH_CLOSE,
-            cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15)),
+            cv2.getStructuringElement(cv2.MORPH_RECT, (13, 13)),
             iterations=3
         )
         
-        # Encontrar el contorno del textil
         contours_textil, _ = cv2.findContours(mask_textil, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         if contours_textil:
             cnt_textil = max(contours_textil, key=cv2.contourArea)
-            
-            # Usar el contorno real en lugar de approximaciones
-            textil_contour = cnt_textil
-            
-            # También calcular círculo envolvente para referencia
             (x_t, y_t), r_textil = cv2.minEnclosingCircle(cnt_textil)
-            cx_textil, cy_textil = int(x_t), int(y_t)
-            r_textil = int(r_textil)
+            cx_textil, cy_textil, r_textil = int(x_t), int(y_t), int(r_textil)
             
-            # Validar tamaño
             if r_textil > r_petri * 0.6:
                 r_textil = int(r_petri * 0.15)
+            
+            textil_contour = cnt_textil
         else:
             cx_textil, cy_textil = cx_petri, cy_petri
             r_textil = int(r_petri * 0.15)
-            # Crear contorno circular por defecto
             textil_contour = np.array([
                 [[cx_textil + int(r_textil * np.cos(theta)), 
                 cy_textil + int(r_textil * np.sin(theta))]]
                 for theta in np.linspace(0, 2*np.pi, 100)
             ], dtype=np.int32)
         
-        # Crear máscara del textil
         mask_textil_filled = np.zeros_like(gray)
         cv2.drawContours(mask_textil_filled, [textil_contour], -1, 255, -1)
         
         # ===========================
-        # DETECCIÓN DE CRECIMIENTO MEJORADA
+        # DETECCIÓN DE CRECIMIENTO
         # ===========================
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         
-        # Rango verde ampliado para capturar más crecimiento
-        lower_green_1 = np.array([30, 30, 30])
-        upper_green_1 = np.array([95, 255, 255])
-        mask_green_1 = cv2.inRange(hsv, lower_green_1, upper_green_1)
+        # Detección verde ampliada
+        lower_green = np.array([30, 30, 30])
+        upper_green = np.array([95, 255, 255])
+        mask_green = cv2.inRange(hsv, lower_green, upper_green)
         
-        # Rango amarillo-verde (algunos cultivos aparecen amarillentos)
+        # Detección amarillo-verde
         lower_yellow = np.array([20, 30, 30])
         upper_yellow = np.array([35, 255, 255])
         mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
         
-        # Combinar máscaras de color
-        mask_color = cv2.bitwise_or(mask_green_1, mask_yellow)
-        
-        # Detección adicional por intensidad (crecimiento oscuro)
+        # Detección por oscuridad
         _, mask_dark = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY_INV)
         
-        # Combinar todas las detecciones
-        mask_growth = cv2.bitwise_or(mask_color, mask_dark)
+        # Combinar detecciones
+        mask_growth = cv2.bitwise_or(mask_green, mask_yellow)
+        mask_growth = cv2.bitwise_or(mask_growth, mask_dark)
         mask_growth = cv2.bitwise_and(mask_growth, mask_petri)
-        
-        # Quitar el textil
         mask_growth[mask_textil_filled > 0] = 0
         
         # Limpieza morfológica
@@ -627,32 +607,28 @@ class MultiStandardAnalyzer:
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_CLOSE, kernel, iterations=2)
         mask_growth = cv2.morphologyEx(mask_growth, cv2.MORPH_OPEN, kernel, iterations=1)
         
-        # Filtrar por área
+        # Filtrar contornos pequeños
         contours_g, _ = cv2.findContours(mask_growth, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         mask_growth_filtered = np.zeros_like(mask_growth)
         petri_area = np.pi * (r_petri ** 2)
         
         for c in contours_g:
             area = cv2.contourArea(c)
-            if area < 30:  # Reducido umbral mínimo
-                continue
-            if area > 0.7 * petri_area:
-                continue
-            cv2.drawContours(mask_growth_filtered, [c], -1, 255, -1)
+            if area >= 30 and area <= 0.7 * petri_area:
+                cv2.drawContours(mask_growth_filtered, [c], -1, 255, -1)
         
         mask_growth = mask_growth_filtered
         
         # ===========================
-        # MEDICIÓN EN 360° (RADIAL)
+        # MEDICIÓN RADIAL 360°
         # ===========================
-        num_angles = 72  # Medir cada 5 grados
+        num_angles = 72  # Cada 5 grados
         angles = np.linspace(0, 2*np.pi, num_angles, endpoint=False)
         
         radial_measurements = []
         measurement_visuals = []
         
         for angle in angles:
-            # Crear línea radial desde el centro del textil
             max_length = int(r_petri * 1.2)
             line_pts = []
             
@@ -662,39 +638,31 @@ class MultiStandardAnalyzer:
                 
                 if x < 0 or x >= w or y < 0 or y >= h:
                     break
-                
                 line_pts.append((x, y))
             
-            # Encontrar borde del textil y primer punto de crecimiento
             textil_edge_dist = None
             growth_start_dist = None
             
             for i, (x, y) in enumerate(line_pts):
-                # Detectar borde del textil
                 if textil_edge_dist is None and mask_textil_filled[y, x] == 0:
                     textil_edge_dist = i
                 
-                # Detectar inicio de crecimiento
                 if textil_edge_dist is not None and mask_growth[y, x] > 0:
                     growth_start_dist = i
                     break
             
-            # Calcular halo si se encontró crecimiento
             if textil_edge_dist is not None and growth_start_dist is not None:
                 halo_px = growth_start_dist - textil_edge_dist
                 halo_mm = halo_px * mm_per_pixel
                 
-                # Validar medición
-                if 0 < halo_mm < 15:  # Rango razonable
+                if 0 < halo_mm < 15:
                     radial_measurements.append(halo_mm)
-                    
-                    # Guardar puntos para visualización
                     pt_textil = line_pts[textil_edge_dist]
                     pt_growth = line_pts[growth_start_dist]
-                    measurement_visuals.append((pt_textil, pt_growth, halo_mm, angle))
+                    measurement_visuals.append((pt_textil, pt_growth, halo_mm))
         
         # ===========================
-        # ESTADÍSTICAS Y VALIDACIÓN
+        # ESTADÍSTICAS
         # ===========================
         if len(radial_measurements) > 0:
             avg_halo_mm = float(np.mean(radial_measurements))
@@ -703,99 +671,66 @@ class MultiStandardAnalyzer:
             min_halo_mm = float(np.min(radial_measurements))
             max_halo_mm = float(np.max(radial_measurements))
             
-            # Filtrar outliers (± 2 desviaciones estándar)
-            filtered_measurements = [
-                m for m in radial_measurements 
-                if abs(m - avg_halo_mm) <= 2 * std_halo_mm
-            ]
-            
-            if len(filtered_measurements) > 0:
-                avg_halo_filtered = float(np.mean(filtered_measurements))
-            else:
-                avg_halo_filtered = avg_halo_mm
+            # Filtrar outliers
+            filtered = [m for m in radial_measurements if abs(m - avg_halo_mm) <= 2 * std_halo_mm]
+            avg_filtered = float(np.mean(filtered)) if len(filtered) > 0 else avg_halo_mm
         else:
             avg_halo_mm = 0.0
             median_halo_mm = 0.0
             std_halo_mm = 0.0
             min_halo_mm = 0.0
             max_halo_mm = 0.0
-            avg_halo_filtered = 0.0
+            avg_filtered = 0.0
         
         # ===========================
         # VISUALIZACIÓN
         # ===========================
         overlay = img.copy()
-        
-        # Colorear textil y crecimiento
         overlay[mask_textil_filled > 0] = (60, 60, 220)
         overlay[mask_growth > 0] = (60, 220, 60)
         
-        # Dibujar mediciones radiales (solo cada 10 para no saturar)
-        for i, (pt_textil, pt_growth, halo_mm, angle) in enumerate(measurement_visuals):
-            if i % 10 == 0:  # Mostrar 1 de cada 10
+        # Dibujar algunas mediciones
+        for i, (pt_textil, pt_growth, halo_mm) in enumerate(measurement_visuals):
+            if i % 10 == 0:
                 cv2.line(overlay, pt_textil, pt_growth, (40, 150, 255), 2)
-                # Texto en algunos puntos clave
                 if i % 20 == 0:
-                    cv2.putText(
-                        overlay,
-                        f"{halo_mm:.2f}",
-                        (pt_growth[0] + 5, pt_growth[1]),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.35,
-                        (255, 255, 255),
-                        1,
-                        cv2.LINE_AA
-                    )
+                    cv2.putText(overlay, f"{halo_mm:.2f}", (pt_growth[0]+3, pt_growth[1]-3),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
         
-        # Mezclar overlay
         overlay_final = cv2.addWeighted(img, 0.6, overlay, 0.4, 0)
         overlay_final = cv2.bitwise_and(overlay_final, overlay_final, mask=mask_petri)
         
-        # Dibujar contorno del textil
         cv2.drawContours(overlay_final, [textil_contour], -1, (0, 0, 255), 2)
         
-        # Información en pantalla
-        y_offset = 25
-        info_texts = [
-            f"Halo Promedio: {avg_halo_mm:.2f} mm",
-            f"Mediana: {median_halo_mm:.2f} mm",
-            f"Rango: {min_halo_mm:.2f} - {max_halo_mm:.2f} mm",
+        # Textos informativos
+        texts = [
+            f"Halo: {avg_halo_mm:.2f} mm (Med: {median_halo_mm:.2f})",
+            f"Rango: {min_halo_mm:.2f}-{max_halo_mm:.2f} mm",
             f"Mediciones: {len(radial_measurements)}/{num_angles}"
         ]
         
-        for i, text in enumerate(info_texts):
-            cv2.putText(
-                overlay_final,
-                text,
-                (10, y_offset + i * 22),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2
-            )
+        for i, text in enumerate(texts):
+            cv2.putText(overlay_final, text, (10, 25 + i*22),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
         
-        if debug:
-            print(f"\n=== RESULTADOS ===")
-            print(f"Mediciones válidas: {len(radial_measurements)}/{num_angles}")
-            print(f"Halo promedio: {avg_halo_mm:.3f} mm")
-            print(f"Halo mediana: {median_halo_mm:.3f} mm")
-            print(f"Desv. estándar: {std_halo_mm:.3f} mm")
-            print(f"Rango: {min_halo_mm:.3f} - {max_halo_mm:.3f} mm")
-            print(f"Halo filtrado (sin outliers): {avg_halo_filtered:.3f} mm")
+        # RETORNAR EN EL FORMATO ORIGINAL ESPERADO
+        # Para mantener compatibilidad con tu código existente
+        line_measurements = radial_measurements  # Lista de mediciones
         
-        results = {
-            'avg_halo_mm': avg_halo_mm,
-            'median_halo_mm': median_halo_mm,
-            'std_halo_mm': std_halo_mm,
-            'min_halo_mm': min_halo_mm,
-            'max_halo_mm': max_halo_mm,
-            'avg_halo_filtered': avg_halo_filtered,
-            'num_measurements': len(radial_measurements),
-            'all_measurements': radial_measurements,
-            'mm_per_pixel': mm_per_pixel
-        }
-        
-        return mask_textil_filled, mask_growth, results, overlay_final, textil_contour
+        return (
+            mask_textil_filled,      # mask_textil
+            mask_growth,             # mask_growth
+            avg_halo_mm,            # avg_halo_mm (float)
+            overlay_final,          # overlay_final
+            line_measurements,      # line_measurements (lista)
+            (cx_textil, cy_textil, r_textil)  # tupla de info del textil
+        )
+
+
+
+
+
+
 
 
     def count_colonies_opencv(self, original_img, debug=False):
