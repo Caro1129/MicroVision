@@ -552,7 +552,7 @@ class MultiStandardAnalyzer:
             mask_textil_filled = np.zeros_like(gray)
             cv2.drawContours(mask_textil_filled, [cnt_textil], -1, 255, -1)
 
-            # 🔥 Calcular centro real
+            # Calcular centro real
             M = cv2.moments(cnt_textil)
             if M["m00"] != 0:
                 cx_textil = int(M["m10"] / M["m00"])
@@ -560,7 +560,7 @@ class MultiStandardAnalyzer:
             else:
                 cx_textil, cy_textil = cx_petri, cy_petri
 
-            # 🔥 Radio equivalente
+            # Radio equivalente
             area_textil = cv2.contourArea(cnt_textil)
             r_textil = int(np.sqrt(area_textil / np.pi))
 
@@ -574,13 +574,13 @@ class MultiStandardAnalyzer:
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         mask_growth = np.zeros_like(gray)
 
-        # beige / verdoso (existente)
+        # beige / verdoso
         mask_growth |= cv2.inRange(hsv, np.array([15, 20, 50]), np.array([40, 200, 255]))
 
         # VERDE
         mask_growth |= cv2.inRange(hsv, np.array([35, 20, 40]), np.array([90, 255, 255]))
 
-        # NUEVO: TURQUESA MUY TENUE (TU CASO)
+        # TURQUESA MUY TENUE
         mask_growth |= cv2.inRange(hsv, np.array([80, 10, 40]), np.array([110, 180, 255]))
 
         # quitar textil y limitar a petri
@@ -595,66 +595,73 @@ class MultiStandardAnalyzer:
         # *LIMITAR MEDICIÓN SOLO A LOS LATERALES*
         # ===========================
         banda = np.zeros_like(gray)
-        ancho = int(w * 0.30)  # mide zona central vertical, ignora arriba/abajo
+        ancho = int(w * 0.30)  # mide zona central vertical
         banda[:, w//2 - ancho//2 : w//2 + ancho//2] = 255
         mask_growth = cv2.bitwise_and(mask_growth, banda)
 
         # ===========================
-        # MEDICIÓN
+        # MEDICIÓN Y VISUALIZACIÓN MEJORADA
         # ===========================
-        def medir(mask_textil, mask_micro, mm_per_pixel):
+        def medir_y_visualizar(mask_textil, mask_micro, mm_per_pixel):
             hh, ww = mask_textil.shape
             halos_mm = []
-
+            mask_visual = np.zeros_like(mask_textil)  # Nueva máscara SOLO para lo medido
+            
             for y_scan in range(0, hh, 3):
                 fila_t = mask_textil[y_scan]
                 fila_m = mask_micro[y_scan]
-
+                
                 idx_textil = np.where(fila_t > 0)[0]
                 if idx_textil.size == 0:
                     continue
-
+                
                 x_left = int(idx_textil[0])
                 x_right = int(idx_textil[-1])
-
+                
                 # izquierda
                 idx_m_left = np.where(fila_m[:x_left] > 0)[0]
                 if idx_m_left.size > 0:
-                    halo_px = x_left - idx_m_left[-1]
+                    x_start = idx_m_left[-1]
+                    halo_px = x_left - x_start
                     if halo_px > 2:
                         halos_mm.append(halo_px * mm_per_pixel)
-
+                        # Pintar SOLO este segmento
+                        mask_visual[y_scan, x_start:x_left] = 255
+                
                 # derecha
                 idx_m_right = np.where(fila_m[x_right+1:] > 0)[0]
                 if idx_m_right.size > 0:
-                    halo_px = idx_m_right[0] + x_right + 1 - x_right
+                    x_end = idx_m_right[0] + x_right + 1
+                    halo_px = x_end - x_right
                     if halo_px > 2:
                         halos_mm.append(halo_px * mm_per_pixel)
-
+                        # Pintar SOLO este segmento
+                        mask_visual[y_scan, x_right:x_end] = 255
+            
             if len(halos_mm) == 0:
-                return 0.0
+                return 0.0, mask_visual
+            
+            return float(np.mean(halos_mm)), mask_visual
 
-            return float(np.mean(halos_mm))
-
-        avg = medir(mask_textil_filled, mask_growth, mm_per_pixel)
+        avg, mask_growth_visual = medir_y_visualizar(mask_textil_filled, mask_growth, mm_per_pixel)
 
         # ===========================
-        # VISUAL
+        # VISUAL (usando la nueva máscara limpia)
         # ===========================
         overlay = img.copy()
-        overlay[mask_textil_filled > 0] = (60, 60, 220)
-        overlay[mask_growth > 0] = (60, 220, 60)
+        overlay[mask_textil_filled > 0] = (60, 60, 220)  # textil azul
+        overlay[mask_growth_visual > 0] = (60, 220, 60)  # halo verde (SOLO lo medido)
 
         overlay_final = cv2.addWeighted(img, 0.5, overlay, 0.5, 0)
 
         return (
-        mask_textil_filled,
-        mask_growth,
-        avg,
-        overlay_final,
-        None,  # line_measurements (si lo necesitas luego lo activo)
-        (cx_textil, cy_textil, r_textil)
-    )
+            mask_textil_filled,
+            mask_growth_visual,  # Ahora retorna la máscara limpia
+            avg,
+            overlay_final,
+            None,  # line_measurements
+            (cx_textil, cy_textil, r_textil)
+        )
 
 
 
