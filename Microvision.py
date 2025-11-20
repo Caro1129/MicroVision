@@ -2785,63 +2785,58 @@ elif st.session_state["pagina"] == "parametros":
         # ============================================================
         # 🎯 CALCULAR REDUCCIÓN LOGARÍTMICA FINAL (SOLO PARA JIS)
         # ============================================================
-        if 'JIS' in norma or 'Z2801' in norma:
-            if control_results_list and treated_results_list:
-                # Extraer valores
-                valores_control = [c['count'] for c in control_results_list]
-                valores_tratadas = [r['results']['treated_count'] for r in treated_results_list]
-                
-                n_control = len(valores_control)
-                n_tratadas = len(valores_tratadas)
-                
-                print("\n" + "="*60)
-                print("🧪 CÁLCULO DE REDUCCIÓN LOGARÍTMICA")
-                print(f"   Réplicas CONTROL: {n_control}")
-                print(f"   Réplicas TRATADAS: {n_tratadas}")
-                print("="*60)
-                
-                # CASO 1: 1 control + 1 tratada
-                if n_control == 1 and n_tratadas == 1:
-                    control_final = valores_control[0]
-                    tratada_final = valores_tratadas[0]
+            # ============================================================
+        # 🎯 CALCULAR REDUCCIÓN LOGARÍTMICA FINAL (SOLO PARA JIS)
+        # ============================================================
+            if 'JIS' in norma or 'Z2801' in norma:
+                if control_results_list and treated_results_list:
+                    # ✅ PASO 1: Extraer valores REALES (no usar results guardados)
+                    valores_control = [float(c['count']) for c in control_results_list]
+                    valores_tratadas = [float(r['results']['treated_count']) for r in treated_results_list]
                     
-                    log_red_final, interpretacion_log, cumple_jis = calcular_reduccion_logaritmica(
-                        control_final, 
-                        tratada_final
-                    )
+                    n_control = len(valores_control)
+                    n_tratadas = len(valores_tratadas)
                     
-                    print(f"\n📊 CASO: 1 control + 1 tratada")
-                    print(f"   Control: {control_final} UFC")
-                    print(f"   Tratada: {tratada_final} UFC")
-                    print(f"   Reducción Log: {log_red_final:.3f}")
+                    print("\n" + "="*60)
+                    print("🧪 CÁLCULO DE REDUCCIÓN LOGARÍTMICA")
+                    print(f"   Réplicas CONTROL: {n_control} → Valores: {valores_control}")
+                    print(f"   Réplicas TRATADAS: {n_tratadas} → Valores: {valores_tratadas}")
+                    print("="*60)
                     
-                    # Actualizar el único resultado tratado
-                    treated_results_list[0]['results']['log_reduction'] = round(log_red_final, 2)
-                
-                # CASO 2: Múltiples réplicas
-                else:
+                    # ✅ PASO 2: Calcular promedios SIEMPRE (incluso si n=1)
                     promedio_control_final = float(np.mean(valores_control))
                     promedio_tratada_final = float(np.mean(valores_tratadas))
                     
+                    # ✅ PASO 3: Calcular reducción log UNA SOLA VEZ
                     log_red_final, interpretacion_log, cumple_jis = calcular_reduccion_logaritmica(
                         promedio_control_final, 
                         promedio_tratada_final
                     )
                     
-                    print(f"\n📊 CASO: Múltiples réplicas")
-                    print(f"   Promedio Control: {promedio_control_final:.2f} UFC (n={n_control})")
-                    print(f"   Promedio Tratada: {promedio_tratada_final:.2f} UFC (n={n_tratadas})")
-                    print(f"   Reducción Log: {log_red_final:.3f}")
+                    # ✅ DEBUG: Verificar valores
+                    print(f"\n📊 CÁLCULO FINAL:")
+                    print(f"   Control promedio: {promedio_control_final:.2f} UFC")
+                    print(f"   Tratada promedio: {promedio_tratada_final:.2f} UFC")
+                    print(f"   log₁₀({promedio_control_final:.2f}) = {np.log10(promedio_control_final):.4f}")
+                    print(f"   log₁₀({promedio_tratada_final:.2f}) = {np.log10(promedio_tratada_final):.4f}")
+                    print(f"   ✅ Reducción Log FINAL: {log_red_final:.3f}")
+                    print(f"   Interpretación: {interpretacion_log}")
+                    print(f"   Cumple JIS Z 2801: {'✅ SÍ (R≥2.0)' if cumple_jis else '❌ NO (R<2.0)'}")
+                    print("="*60 + "\n")
                     
-                    # Actualizar TODOS los resultados tratados con la reducción log promedio
+                    # ✅ PASO 4: Actualizar TODOS los resultados con el MISMO valor
                     for replica in treated_results_list:
-                        replica['results']['log_reduction'] = round(log_red_final, 2)
-                
-                # Guardar en session_state
-                st.session_state["log_reduction_final"] = log_red_final
-                st.session_state["log_interpretation"] = interpretacion_log
-                st.session_state["cumple_jis"] = cumple_jis
-                
+                        replica['results']['log_reduction'] = round(log_red_final, 3)  # 3 decimales
+                        replica['results']['control_count'] = promedio_control_final
+                        replica['results']['treated_count'] = promedio_tratada_final
+                    
+                    # ✅ PASO 5: Guardar en session_state
+                    st.session_state["log_reduction_final"] = log_red_final
+                    st.session_state["log_interpretation"] = interpretacion_log
+                    st.session_state["cumple_jis"] = cumple_jis
+                    st.session_state["promedio_control_final"] = promedio_control_final
+                    st.session_state["promedio_tratada_final"] = promedio_tratada_final
+                    
                 print(f"   Interpretación: {interpretacion_log}")
                 print(f"   Cumple JIS: {'✅ SÍ' if cumple_jis else '❌ NO'}")
                 print("="*60 + "\n")
