@@ -55,11 +55,41 @@ def generar_pdf_reporte_completo():
     titulo = ParagraphStyle("Titulo", parent=styles["Heading1"], fontSize=18, alignment=1, textColor=colors.HexColor("#1A5276"))
     subtitulo = ParagraphStyle("Subtitulo", parent=styles["Heading2"], fontSize=13, textColor="#154360", spaceAfter=8)
     normal_just = ParagraphStyle("Just", parent=styles["BodyText"], alignment=4, fontSize=11, leading=14)
+    
+    # ============================================================
+    # 🔧 FUNCIÓN PARA LIMPIAR TEXTO (NUEVA)
+    # ============================================================
+    def limpiar_texto_pdf(texto):
+        """Limpia el texto eliminando HTML y normalizando caracteres especiales"""
+        if not texto:
+            return ""
+        
+        # Eliminar tags HTML comunes
+        texto = texto.replace("<br>", " ").replace("<br/>", " ").replace("<br />", " ")
+        texto = texto.replace("<div style='text-align: justify;'>", "")
+        texto = texto.replace("<div>", "").replace("</div>", "")
+        texto = texto.replace("<p>", "").replace("</p>", "")
+        texto = texto.replace("<strong>", "").replace("</strong>", "")
+        texto = texto.replace("<em>", "").replace("</em>", "")
+        texto = texto.replace("<b>", "").replace("</b>", "")
+        texto = texto.replace("&nbsp;", " ")
+        
+        # Mantener itálicas (ReportLab las soporta)
+        # texto ya tiene <i> y </i>, no los tocamos
+        
+        # Normalizar espacios múltiples
+        import re
+        texto = re.sub(r'\s+', ' ', texto).strip()
+        
+        return texto
 
     # ============================================================
     # HELPER: Añadir imágenes en filas de 2
     # ============================================================
     def agregar_fila_imagenes(story, lista_imagenes, temp_files):
+        from reportlab.platypus import Image as RLImage
+        from PIL import Image
+        
         fila = []
         for img_array, caption in lista_imagenes:
 
@@ -97,17 +127,20 @@ def generar_pdf_reporte_completo():
     # ============================================================
     story.append(Paragraph("REPORTE DE ANALISIS MICROVISION", titulo))
     fecha = datetime.now().strftime("%d/%m/%Y - %H:%M")
-    story.append(Paragraph(f"<b>Fecha de generación:</b> {fecha}", styles["BodyText"]))
+    story.append(Paragraph(f"<b>Fecha de generacion:</b> {fecha}", styles["BodyText"]))
     story.append(Spacer(1, 0.6*cm))
 
     # ============================================================
-    # INFORMACIÓN DEL ENSAYO
+    # INFORMACIÓN DEL ENSAYO (🔧 CORREGIDO)
     # ============================================================
     norma = st.session_state.get("norma", "No especificada")
-    descripcion = st.session_state.get("descripcion", "").replace("<div style='text-align: justify;'>", "").replace("</div>", "")
+    descripcion_raw = st.session_state.get("descripcion", "")
+    
+    # 🔧 LIMPIAR LA DESCRIPCIÓN
+    descripcion_limpia = limpiar_texto_pdf(descripcion_raw)
 
-    story.append(Paragraph("1. Descripción del ensayo", subtitulo))
-    story.append(Paragraph(descripcion, normal_just))
+    story.append(Paragraph("1. Descripcion del ensayo", subtitulo))
+    story.append(Paragraph(descripcion_limpia, normal_just))
     story.append(Spacer(1, 0.4*cm))
 
     # ============================================================
@@ -139,20 +172,20 @@ def generar_pdf_reporte_completo():
     # ============================================================
     # TABLAS DE RESULTADOS (Compactas)
     # ============================================================
-    story.append(Paragraph("3. Resultados del análisis", subtitulo))
+    story.append(Paragraph("3. Resultados del analisis", subtitulo))
 
     valores_replicas = st.session_state.get("valores_replicas", [])
     media = st.session_state.get("media", 0)
     desviacion = st.session_state.get("desviacion", 0)
 
     # --- TABLA PRINCIPAL ---
-    datos = [["Réplica", "Valor"]]
+    datos = [["Replica", "Valor"]]
     for i, v in enumerate(valores_replicas):
         datos.append([f"{i+1}", f"{v:.2f}"])
 
     if len(valores_replicas) > 1:
         datos.append(["Media", f"{media:.2f}"])
-        datos.append(["Desviación estándar", f"{desviacion:.2f}"])
+        datos.append(["Desviacion estandar", f"{desviacion:.2f}"])
 
     tabla = Table(datos, hAlign="CENTER", colWidths=[6*cm, 6*cm])
     tabla.setStyle(TableStyle([
@@ -183,19 +216,19 @@ def generar_pdf_reporte_completo():
             story.append(RLImage(tmp_graph.name, width=10*cm, height=6*cm))
             story.append(Spacer(1, 0.4*cm))
         except:
-            story.append(Paragraph("Error al generar gráfica.", styles["BodyText"]))
+            story.append(Paragraph("Error al generar grafica.", styles["BodyText"]))
 
     # ============================================================
     # TEST T (compacto)
     # ============================================================
     test = st.session_state.get("test_t_results", {})
     if test and test.get("suficientes_datos", False):
-        story.append(Paragraph("ANÁLISIS ESTADÍSTICO (TEST T)", subtitulo))
+        story.append(Paragraph("ANALISIS ESTADISTICO (TEST T)", subtitulo))
         datos_t = [
-            ["Estadístico t", f"{test['t_statistic']:.4f}"],
+            ["Estadistico t", f"{test['t_statistic']:.4f}"],
             ["Valor p", f"{test['p_value']:.4f}"],
             ["gl", str(test['grados_libertad'])],
-            ["Significativo", "Sí" if test['es_significativo'] else "No"]
+            ["Significativo", "Si" if test['es_significativo'] else "No"]
         ]
         tabla_t = Table(datos_t, colWidths=[6*cm, 6*cm])
         tabla_t.setStyle(TableStyle([
@@ -206,19 +239,23 @@ def generar_pdf_reporte_completo():
         story.append(Spacer(1, 0.4*cm))
 
     # ============================================================
-    # CONCLUSIÓN
+    # CONCLUSIÓN (🔧 CORREGIDO)
     # ============================================================
-    story.append(Paragraph("4. Conclusión", subtitulo))
-    interpretacion = st.session_state.get("interpretacion", "No disponible")
-    story.append(Paragraph(interpretacion, normal_just))
+    story.append(Paragraph("4. Conclusion", subtitulo))
+    interpretacion_raw = st.session_state.get("interpretacion", "No disponible")
+    
+    # 🔧 LIMPIAR LA INTERPRETACIÓN
+    interpretacion_limpia = limpiar_texto_pdf(interpretacion_raw)
+    
+    story.append(Paragraph(interpretacion_limpia, normal_just))
 
     # ============================================================
-    # PIE DE PÁGINA
+    # PIE DE PÁGINA (🔧 SIN CARACTERES ESPECIALES)
     # ============================================================
     story.append(Spacer(1, 0.6*cm))
     pie = f"""
     <para alignment="center" fontSize="9" textColor="#777777">
-    MicroVision – Sistema de Análisis Microbiológico Automatizado<br/>
+    MicroVision - Sistema de Analisis Microbiologico Automatizado<br/>
     Reporte generado el {fecha}
     </para>
     """
