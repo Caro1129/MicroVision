@@ -57,7 +57,7 @@ def generar_pdf_reporte_completo():
     normal_just = ParagraphStyle("Just", parent=styles["BodyText"], alignment=4, fontSize=11, leading=14)
     
     # ============================================================
-    # 🔧 FUNCIÓN PARA LIMPIAR TEXTO (NUEVA)
+    # 🔧 FUNCIÓN PARA LIMPIAR TEXTO
     # ============================================================
     def limpiar_texto_pdf(texto):
         """Limpia el texto eliminando HTML y normalizando caracteres especiales"""
@@ -73,9 +73,6 @@ def generar_pdf_reporte_completo():
         texto = texto.replace("<em>", "").replace("</em>", "")
         texto = texto.replace("<b>", "").replace("</b>", "")
         texto = texto.replace("&nbsp;", " ")
-        
-        # Mantener itálicas (ReportLab las soporta)
-        # texto ya tiene <i> y </i>, no los tocamos
         
         # Normalizar espacios múltiples
         import re
@@ -131,12 +128,11 @@ def generar_pdf_reporte_completo():
     story.append(Spacer(1, 0.6*cm))
 
     # ============================================================
-    # INFORMACIÓN DEL ENSAYO (🔧 CORREGIDO)
+    # INFORMACIÓN DEL ENSAYO
     # ============================================================
     norma = st.session_state.get("norma", "No especificada")
     descripcion_raw = st.session_state.get("descripcion", "")
     
-    # 🔧 LIMPIAR LA DESCRIPCIÓN
     descripcion_limpia = limpiar_texto_pdf(descripcion_raw)
 
     story.append(Paragraph("1. Descripcion del ensayo", subtitulo))
@@ -198,10 +194,12 @@ def generar_pdf_reporte_completo():
     story.append(Spacer(1, 0.4*cm))
 
     # ============================================================
-    # GRÁFICA (sin salto de página)
+    # GRÁFICA (🔧 IMPORTACIÓN CORREGIDA)
     # ============================================================
     if len(valores_replicas) > 1:
         try:
+            from reportlab.platypus import Image as RLImage  # 🔧 AÑADIDO AQUÍ
+            
             fig, ax = plt.subplots(figsize=(4.5, 3))
             error_est = desviacion / len(valores_replicas)**0.5
             ax.bar(["Media"], [media], yerr=[error_est], capsize=6)
@@ -215,8 +213,8 @@ def generar_pdf_reporte_completo():
 
             story.append(RLImage(tmp_graph.name, width=10*cm, height=6*cm))
             story.append(Spacer(1, 0.4*cm))
-        except:
-            story.append(Paragraph("Error al generar grafica.", styles["BodyText"]))
+        except Exception as e:
+            story.append(Paragraph(f"Error al generar grafica: {str(e)}", styles["BodyText"]))
 
     # ============================================================
     # TEST T (compacto)
@@ -239,18 +237,17 @@ def generar_pdf_reporte_completo():
         story.append(Spacer(1, 0.4*cm))
 
     # ============================================================
-    # CONCLUSIÓN (🔧 CORREGIDO)
+    # CONCLUSIÓN
     # ============================================================
     story.append(Paragraph("4. Conclusion", subtitulo))
     interpretacion_raw = st.session_state.get("interpretacion", "No disponible")
     
-    # 🔧 LIMPIAR LA INTERPRETACIÓN
     interpretacion_limpia = limpiar_texto_pdf(interpretacion_raw)
     
     story.append(Paragraph(interpretacion_limpia, normal_just))
 
     # ============================================================
-    # PIE DE PÁGINA (🔧 SIN CARACTERES ESPECIALES)
+    # PIE DE PÁGINA
     # ============================================================
     story.append(Spacer(1, 0.6*cm))
     pie = f"""
